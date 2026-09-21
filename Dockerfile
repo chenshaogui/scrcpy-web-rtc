@@ -32,14 +32,22 @@ FROM node:${NODE_VERSION}-bookworm-slim AS build
 # must match VERSION in server.mjs
 ARG SCRCPY_VERSION=3.1
 WORKDIR /app
+
+# 更换为清华镜像源
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
+
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY public ./public
 COPY src ./src
+COPY *.mjs ./
 RUN npm run build \
  && npx --yes fetch-scrcpy-server "${SCRCPY_VERSION}" \
  && cp node_modules/@yume-chan/fetch-scrcpy-server/server.bin ./server.bin \
  && cp node_modules/@yume-chan/fetch-scrcpy-server/scrcpy.LICENSE ./scrcpy-server.LICENSE
+
+ RUN ls -la /app
 
 # ---------------------------------------------------------------------------
 # stage 2 — runtime: node + adb + the bundled page
