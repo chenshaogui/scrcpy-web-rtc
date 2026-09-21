@@ -49,46 +49,8 @@ ENV NODE_ENV=production \
 # the app speaks to an adb *server* over TCP (ADB_HOST:ADB_PORT) and never
 # spawns the adb binary itself, so start one inside the container and hand it
 # the device list before node boots
-COPY <<'EOF' /usr/local/bin/tango-entrypoint
-#!/bin/sh
-set -e
+COPY tango-entrypoint.sh /usr/local/bin/tango-entrypoint
 
-# a host HOME (C:\Users\... or /Users/...) can leak into the container through
-# the CLI; adb keeps its keys in $HOME/.android, so fall back to a real path
-if [ -z "${HOME:-}" ] || [ ! -w "${HOME}" ]; then
-    HOME=/root
-    export HOME
-fi
-
-adb_host="${ADB_HOST:-127.0.0.1}"
-adb_port="${ADB_PORT:-5555}"
-
-case "$adb_host" in
-    127.0.0.1|localhost|::1)
-        # no -H/-L here on purpose: given an explicit host adb assumes a remote
-        # one and refuses to spawn a daemon ("cannot start server on remote host")
-        adb -P "$adb_port" start-server >/dev/null
-        echo "tango-mirror: $(adb version | head -n1) listening on ${adb_host}:${adb_port}"
-        ;;
-    *)
-        echo "tango-mirror: using the adb server at ${adb_host}:${adb_port}"
-        ;;
-esac
-
-# set once the local server is up, so `docker exec -it tango-mirror adb devices`
-# and the connects below both go through the same server
-export ADB_SERVER_SOCKET="tcp:${adb_host}:${adb_port}"
-
-# ADB_DEVICES=192.168.1.7:5555,192.168.1.8:5555, connected before the page loads
-for device in $(echo "${ADB_DEVICES:-}" | tr ',' ' '); do
-    [ -n "$device" ] || continue
-    adb connect "$device" || echo "tango-mirror: adb connect $device failed" >&2
-done
-
-exec "$@"
-EOF
-
-# guard against a CRLF checkout on Windows, the heredoc keeps bytes verbatim
 RUN sed -i 's/\r$//' /usr/local/bin/tango-entrypoint \
  && chmod +x /usr/local/bin/tango-entrypoint
 
