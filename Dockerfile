@@ -28,7 +28,7 @@ ARG NODE_VERSION=22
 # ---------------------------------------------------------------------------
 # stage 1 — browser bundle (esbuild) and the scrcpy server jar (server.bin)
 # ---------------------------------------------------------------------------
-FROM node:${NODE_VERSION}-bookworm-slim AS build
+FROM node:${NODE_VERSION}-bookworm-slim
 # must match VERSION in server.mjs
 ARG SCRCPY_VERSION=3.1
 WORKDIR /app
@@ -37,41 +37,35 @@ WORKDIR /app
 RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
     sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
 
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY public ./public
-COPY src ./src
-COPY *.mjs ./
+# 安装 ADB 工具
+RUN apt-get update && \
+    apt-get install -y \
+        android-tools-adb \
+        python3 \
+        python3-pip \
+        make \
+        g++ \
+        gcc \
+        libc6-dev \
+        build-essential \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY * ./
+
+# 设置 npm 镜像源并安装生产依赖
+RUN npm install -g cnpm --registry=https://registry.npmmirror.com
+RUN cnpm install
+
 RUN npm run build \
  && npx --yes fetch-scrcpy-server "${SCRCPY_VERSION}"
 
- RUN ls -la /app
-
-# ---------------------------------------------------------------------------
-# stage 2 — runtime: node + adb + the bundled page
-# ---------------------------------------------------------------------------
-FROM node:${NODE_VERSION}-bookworm-slim AS runtime
-
-# adb ships in Debian's android-tools on amd64 and arm64 alike (1.0.41 here,
-# which is what scrcpy's server needs); no udev rules — in a container the
-# device nodes come from the host
-RUN apt-get update \
- && apt-get install -y --no-install-recommends adb \
- && rm -rf /var/lib/apt/lists/* \
- && adb version
+RUN ls -la /app
 
 ENV NODE_ENV=production \
     PORT=8010 \
     ADB_HOST=127.0.0.1 \
-    ADB_PORT=5037
-
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-COPY server.mjs signal.mjs webrtc.mjs ./
-COPY --from=build /app/public ./public
-COPY --from=build /app/server.bin ./server.bin
-COPY --from=build /app/scrcpy-server.LICENSE ./scrcpy-server.LICENSE
+    ADB_PORT=5555
 
 # the app speaks to an adb *server* over TCP (ADB_HOST:ADB_PORT) and never
 # spawns the adb binary itself, so start one inside the container and hand it
@@ -88,7 +82,7 @@ if [ -z "${HOME:-}" ] || [ ! -w "${HOME}" ]; then
 fi
 
 adb_host="${ADB_HOST:-127.0.0.1}"
-adb_port="${ADB_PORT:-5037}"
+adb_port="${ADB_PORT:-5555}"
 
 case "$adb_host" in
     127.0.0.1|localhost|::1)
