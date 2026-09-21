@@ -26,6 +26,8 @@ RUN apt-get update && \
         && \
     rm -rf /var/lib/apt/lists/*
 
+COPY . .
+
 # 使用标准 npm + 淘宝镜像，避免 cnpm 生成的 esbuild 启动脚本把 ELF 当 JS 解析
 RUN npm config set registry https://registry.npmmirror.com
 
