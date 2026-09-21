@@ -43,9 +43,7 @@ COPY public ./public
 COPY src ./src
 COPY *.mjs ./
 RUN npm run build \
- && npx --yes fetch-scrcpy-server "${SCRCPY_VERSION}" \
- && cp node_modules/@yume-chan/fetch-scrcpy-server/server.bin ./server.bin \
- && cp node_modules/@yume-chan/fetch-scrcpy-server/scrcpy.LICENSE ./scrcpy-server.LICENSE
+ && npx --yes fetch-scrcpy-server "${SCRCPY_VERSION}"
 
  RUN ls -la /app
 
