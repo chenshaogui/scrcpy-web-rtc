@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>redroid web</title>
+<style>
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0;
+        height: 100dvh;
+        overflow: hidden;
+        overscroll-behavior: none;
+        background: #0f1115;
+        color: #e6e8ec;
+        font-family: system-ui, -apple-system, sans-serif;
+        -webkit-tap-highlight-color: transparent;
+    }
+    body { display: flex; flex-direction: column; }
+
+    /* ── floating settings button + sheet ──────── */
+    #device-select, #quality-select, #encoder-select, #audio-encoder-select {
+        min-width: 0;
+        max-width: 58%;
+        height: 40px;
+        padding: 0 10px;
+        border-radius: 10px;
+        border: 1px solid #2a2f3a;
+        background: #0f1115;
+        color: inherit;
+        font-size: 15px;
+        appearance: none;
+        text-overflow: ellipsis;
+    }
+    #encoder-select[hidden], #audio-encoder-select[hidden] { display: none; }
+    .iconbtn {
+        flex: none;
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        border: 1px solid #2a2f3a;
+        background: #171b22;
+        color: #e6e8ec;
+        font-size: 17px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: manipulation;
+    }
+    .iconbtn:active { background: #232a36; }
+    .fab {
+        position: fixed;
+        right: 16px;
+        bottom: calc(16px + env(safe-area-inset-bottom));
+        z-index: 8;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        border: 1px solid #2a2f3a;
+        background: rgba(23, 27, 34, .92);
+        backdrop-filter: blur(8px);
+        color: #e6e8ec;
+        font-size: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .45);
+        /* the button doubles as a drag handle, so the browser must not claim
+           the gesture for panning or text selection */
+        touch-action: none;
+        user-select: none;
+    }
+    .fab:active { background: #232a36; }
+    .fab.dragging { transform: scale(1.08); box-shadow: 0 8px 24px rgba(0, 0, 0, .6); }
+    /* the keyboard bar's send button lives in the same corner — step over it
+       (only while the button still sits in its default corner) */
+    #kbdbar:not([hidden]) ~ #btn-settings:not(.placed) {
+        bottom: calc(72px + env(safe-area-inset-bottom));
+    }
+    /* once dragged, the button owns its own coordinates and drops the
+       right/bottom anchoring, including the shell-offset rule below */
+    #btn-settings.placed {
+        left: var(--fab-x);
+        top: var(--fab-y);
+        right: auto;
+        bottom: auto;
+    }
+    #settings-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 9;
+        background: rgba(0, 0, 0, .45);
+    }
+    #settings-sheet {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 10;
+        max-height: 75dvh;
+        overflow-y: auto;
+        background: #171b22;
+        border-radius: 16px 16px 0 0;
+        border-top: 1px solid #2a2f3a;
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, .5);
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+    @media (min-width: 640px) {
+        /* desktop: a centred card instead of a bottom sheet, and the button
+           steps aside so it never floats over the shell terminal */
+        #settings-sheet {
+            left: 50%;
+            right: auto;
+            bottom: auto;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: min(420px, 92vw);
+            border-radius: 16px;
+            border: 1px solid #2a2f3a;
+        }
+        body.with-shell .fab { right: calc(50% + 16px); }
+    }
+    #settings-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 12px 4px 16px;
+    }
+    #settings-title { flex: 1; font-size: 16px; font-weight: 600; }
+    #settings-head .iconbtn { width: 32px; height: 32px; font-size: 14px; }
+    .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        border-bottom: 1px solid #20252f;
+        font-size: 15px;
+    }
+    .row:last-child { border-bottom: none; }
+    .row label { flex: 1; color: #cdd3dd; cursor: pointer; }
+    .row .mini {
+        min-width: 44px;
+        height: 36px;
+        padding: 0 12px;
+        border-radius: 10px;
+        border: 1px solid #2a2f3a;
+        background: #0f1115;
+        color: inherit;
+        font-size: 16px;
+        touch-action: manipulation;
+    }
+    .row .mini:active { background: #232a36; }
+    /* a row whose only control is a hidden encoder picker is just a label */
+    .row:has(> select[hidden]) { display: none; }
+
+    /* ── status badge overlays the stage ───────── */
+    #stage-wrap {
+        flex: 1;
+        min-height: 0;
+        position: relative;
+        display: flex;
+    }
+    #status-badge {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 5;
+        max-width: 80%;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(15, 17, 21, .72);
+        backdrop-filter: blur(6px);
+        font-size: 12px;
+        line-height: 1.4;
+        color: #aab2c0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        pointer-events: none;
+    }
+    #status-badge.p2p { color: #7ee2a8; }
+    #status-badge.error { color: #ff8f8f; pointer-events: auto; white-space: normal; }
+
+    /* ── stage ─────────────────────────────────── */
+    #stage {
+        flex: 1;
+        position: relative;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+        background: #000;
+    }
+    #stage:empty::before {
+        content: attr(data-empty-hint);
+        color: #4a5160;
+        font-size: 14px;
+    }
+    .screen {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: 100%;
+        touch-action: none;
+        object-fit: contain;
+        position: relative;
+        z-index: 1;
+    }
+    /* P2P video sits visible underneath the canvas so Chrome keeps its
+       render pipeline warm; switching just removes the canvas on top */
+    .screen-video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        z-index: 0;
+        touch-action: none;
+    }
+
+    /* ── shell panel ───────────────────────────── */
+    /* narrow/portrait: docked at the bottom. wide/landscape: docked to the
+       right, where a portrait device screen leaves the space unused */
+    body.with-shell #stage { margin-bottom: 55%; }
+    #shell-panel {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 55%;
+        z-index: 6;
+        display: flex;
+        flex-direction: column;
+        background: #0f1115;
+        border-top: 1px solid #2a2f3a;
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, .5);
+    }
+    @media (min-aspect-ratio: 1/1) and (min-width: 640px) {
+        /* clean vertical split: the shell takes the right column full height,
+           and the screen — plus the keyboard bar under it — stays centred
+           within the left column */
+        body.with-shell #stage { margin-bottom: 0; }
+        body.with-shell #stage-wrap,
+        body.with-shell #kbdbar { margin-right: 50%; }
+        #shell-panel {
+            position: fixed;
+            left: auto;
+            top: 0;
+            bottom: 0;
+            right: 0;
+            width: 50%;
+            height: auto;
+            border-top: none;
+            border-left: 1px solid #2a2f3a;
+            box-shadow: -8px 0 24px rgba(0, 0, 0, .5);
+        }
+    }
+    #shell-panel[hidden] { display: none; }
+    #shell-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px 6px 12px;
+        border-bottom: 1px solid #2a2f3a;
+        font-size: 13px;
+        color: #aab2c0;
+    }
+    #shell-title { flex: 1; }
+    #shell-head .iconbtn { width: 32px; height: 32px; font-size: 14px; }
+    #terminal { flex: 1; min-height: 0; padding: 4px 0 4px 8px; }
+
+    /* ── keyboard input bar ────────────────────── */
+    #kbdbar {
+        display: flex;
+        gap: 8px;
+        padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+        flex: none;
+        background: #12151b;
+        border-top: 1px solid #2a2f3a;
+    }
+    #kbdbar[hidden] { display: none; }
+    #kbd-input {
+        flex: 1;
+        min-width: 0;
+        height: 40px;
+        padding: 0 12px;
+        border-radius: 10px;
+        border: 1px solid #2a2f3a;
+        background: #171b22;
+        color: inherit;
+        font-size: 16px; /* ≥16px prevents iOS auto-zoom on focus */
+    }
+    #kbd-send {
+        flex: none;
+        height: 40px;
+        padding: 0 16px;
+        border-radius: 10px;
+        border: none;
+        background: #2f6fed;
+        color: #fff;
+        font-size: 15px;
+        touch-action: manipulation;
+    }
+
+    /* ── remote keys, as tiles inside the sheet ── */
+    .tiles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        padding: 12px 16px;
+        border-bottom: 1px solid #20252f;
+    }
+    .tile {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        height: 64px;
+        border-radius: 12px;
+        border: 1px solid #2a2f3a;
+        background: #0f1115;
+        color: #aab2c0;
+        font-size: 20px;
+        touch-action: manipulation;
+    }
+    .tile:active { color: #fff; background: #232a36; }
+    .tile small { font-size: 11px; color: #8b93a1; }
+    .tile.accent { color: #7ea6f5; }
+    /* the shell tile only appears once the device reports a shell service */
+    .tile[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="stage-wrap">
+    <div id="stage"></div>
+    <span id="status-badge" hidden></span>
+    <section id="shell-panel" hidden>
+        <div id="shell-head">
+            <span id="shell-title">shell</span>
+            <button id="shell-close" class="iconbtn">✕</button>
+        </div>
+        <div id="terminal"></div>
+    </section>
+</div>
+<div id="kbdbar" hidden>
+    <input id="kbd-input" placeholder="输入文字，回车发送到设备" autocomplete="off" autocapitalize="off">
+    <button id="kbd-send">发送</button>
+</div>
+
+<button id="btn-settings" class="fab" title="设置">⚙</button>
+<div id="settings-backdrop" hidden></div>
+<section id="settings-sheet" hidden>
+    <header id="settings-head">
+        <span id="settings-title">设置</span>
+        <button id="settings-close" class="iconbtn" title="关闭">✕</button>
+    </header>
+    <div class="tiles">
+        <button id="btn-power" class="tile" title="电源">⏻<small id="label-power">电源</small></button>
+        <button id="btn-back" class="tile" title="返回">◁<small id="label-back">返回</small></button>
+        <button id="btn-home" class="tile" title="主页">◯<small id="label-home">主页</small></button>
+        <button id="btn-recents" class="tile" title="最近任务">▢<small id="label-recents">最近任务</small></button>
+        <button id="btn-kbd" class="tile accent" title="键盘">⌨<small id="label-kbd">键盘</small></button>
+        <button id="btn-shell" class="tile accent" title="Shell" hidden>&gt;_<small id="label-shell">Shell</small></button>
+    </div>
+    <div class="row">
+        <label id="label-device" for="device-select">设备</label>
+        <select id="device-select"></select>
+    </div>
+    <div class="row">
+        <label id="label-refresh" for="refresh">刷新设备列表</label>
+        <button id="refresh" class="mini" title="刷新设备列表">⟳</button>
+    </div>
+    <div class="row">
+        <label id="label-quality" for="quality-select">画质</label>
+        <select id="quality-select" title="画质">
+            <option value="auto">自动</option>
+            <option value="low">流畅</option>
+            <option value="medium">平衡</option>
+            <option value="high">高清</option>
+        </select>
+    </div>
+    <div class="row">
+        <label id="label-encoder" for="encoder-select">视频编码器</label>
+        <select id="encoder-select" title="视频编码器" hidden></select>
+    </div>
+    <div class="row">
+        <label id="label-audio-encoder" for="audio-encoder-select">音频编码器</label>
+        <select id="audio-encoder-select" title="音频编码器" hidden></select>
+    </div>
+    <div class="row">
+        <label id="label-sound" for="btn-mute">声音</label>
+        <button id="btn-mute" class="mini" title="声音">🔇</button>
+    </div>
+    <div class="row">
+        <label id="label-fullscreen" for="btn-fullscreen">全屏</label>
+        <button id="btn-fullscreen" class="mini" title="全屏">⛶</button>
+    </div>
+</section>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

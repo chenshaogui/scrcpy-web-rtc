@@ -1,0 +1,14 @@
+# never ship the host's installs into the build (wrong platform, huge)
+node_modules
+
+# generated inside the image by the build stage
+public/*.js
+server.bin
+scrcpy-server.LICENSE
+
+.git
+.gitignore
+.idea
+*.tgz
+Dockerfile
+docker-compose.yml

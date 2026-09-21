@@ -1,0 +1,8 @@
+node_modules/
+*.tgz
+# generated at prepack
+server.bin
+scrcpy-server.LICENSE
+public/*.js
+*.swp
+*.swo

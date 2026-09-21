@@ -1,0 +1,56 @@
+# docker compose up -d --build
+#
+# Compose builds for the machine it runs on. To run an image of the other
+# architecture, build it first (same Dockerfile, different base image variant)
+# and let compose reuse the tag:
+#   docker buildx build --platform linux/arm64 -t tango-mirror:latest --load .
+#   docker compose up -d
+
+services:
+  tango-mirror:
+    build:
+      context: .
+      args:
+        NODE_VERSION: "22"
+    image: tango-mirror:latest
+    container_name: tango-mirror
+    restart: unless-stopped
+    # platform: linux/arm64          # needed only when the image's arch differs
+
+    ports:
+      - "8010:8010"
+
+    environment:
+      TZ: Asia/Shanghai
+      PORT: "8010"
+      ADB_PORT: "5037"
+      # 127.0.0.1            -> the adb server inside this container (default)
+      # host.docker.internal -> an adb server already running on the host
+      ADB_HOST: "127.0.0.1"
+      # devices to attach on boot, e.g. 192.168.1.7:5555,192.168.1.8:5555
+      ADB_DEVICES: ""
+      # same knobs as the command line: empty string = unset
+      TANGO_TOKEN: ""
+      VIDEO_ENCODER: ""
+      AUDIO_ENCODER: ""
+
+    # lets ADB_HOST=host.docker.internal resolve on Linux as well
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      # adb keys, so device authorizations survive container rebuilds
+      - tango-adb-keys:/root/.android
+
+    # flags after the entrypoint are passed straight to server.mjs
+    # add --shell (generates a token) or --token <secret> for the device shell
+    command: ["node", "server.mjs", "--no-page", "--no-signal"]
+
+    # USB devices instead of Wi-Fi (Linux hosts):
+    # privileged: true
+    # volumes:
+    #   - tango-adb-keys:/root/.android
+    #   - /dev/bus/usb:/dev/bus/usb
+
+volumes:
+  tango-adb-keys:
