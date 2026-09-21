@@ -1,28 +1,3 @@
-# tango-mirror in a box:  node server.mjs --no-page --no-signal  +  adb
-#
-# Everything below is multi-arch (linux/amd64 + linux/arm64): the base images
-# are multi-arch and adb comes from the distro, so the same Dockerfile builds
-# natively for either CPU.
-#
-#   # one manifest with both architectures (needs somewhere to push it)
-#   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t <registry>/tango-mirror:0.6.0 --push .
-#
-#   # just this machine: --load takes a single platform
-#   docker buildx build --platform linux/amd64 -t tango-mirror:amd64 --load .
-#   docker buildx build --platform linux/arm64 -t tango-mirror:arm64 --load .
-#
-# Cross-arch builds run under QEMU: Docker Desktop ships it, on plain Linux do
-#   docker run --privileged --rm tonistiigi/binfmt --install all
-#
-# Run it (defaults to the container's own adb server, devices attached over Wi-Fi):
-#   docker run -d --name tango-mirror -p 8010:8010 \
-#     -e ADB_DEVICES=192.168.1.7:5555 tango-mirror:amd64
-#   docker exec -it tango-mirror adb devices
-#
-# Rather reuse the adb server already running on the host (USB devices included):
-#   -e ADB_HOST=host.docker.internal --add-host host.docker.internal:host-gateway
-
 ARG NODE_VERSION=22
 
 # ---------------------------------------------------------------------------
@@ -51,16 +26,18 @@ RUN apt-get update && \
         && \
     rm -rf /var/lib/apt/lists/*
 
-COPY * ./
+# 使用标准 npm + 淘宝镜像，避免 cnpm 生成的 esbuild 启动脚本把 ELF 当 JS 解析
+RUN npm config set registry https://registry.npmmirror.com
 
-# 设置 npm 镜像源并安装生产依赖
-RUN npm install -g cnpm --registry=https://registry.npmmirror.com
-RUN cnpm install
+# 安装依赖
+RUN npm install
 
+# 确保 esbuild 的原生二进制被 npm 正确链接（覆盖 cnpm/异常安装可能留下的错误包装脚本）
+RUN npm install esbuild --no-save --registry=https://registry.npmmirror.com
+
+# 构建前端 + 下载 scrcpy server
 RUN npm run build \
  && npx --yes fetch-scrcpy-server "${SCRCPY_VERSION}"
-
-RUN ls -la /app
 
 ENV NODE_ENV=production \
     PORT=8010 \
