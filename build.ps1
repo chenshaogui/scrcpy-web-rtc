@@ -30,7 +30,14 @@ $ErrorActionPreference = 'Stop'
 # ---------- config ----------
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ImageName = "scrcpy-webrtc"
-$NodeImage = "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22.23.2-slim"
+# IMPORTANT: must be a REAL multi-arch manifest. The Huawei Cloud mirror
+# (swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22.23.2-slim) serves
+# amd64 content for its arm64 variant, producing a "fake arm64" image that
+# builds fine (native amd64 exec on the x86 builder, no QEMU slowdown) but dies
+# with 'exec format error' on real arm64 hosts. Verify a mirror with:
+#   docker buildx imagetools inspect <mirror>/node:22.23.2-slim
+# and only use it if it lists a genuine linux/arm64 platform.
+$NodeImage = "docker.io/node:22.23.2-slim"
 
 # image full name
 if ($Registry -ne "") {
@@ -124,6 +131,11 @@ try {
         "buildx", "build", "--builder", $BuilderName
         "--platform", $Platforms
         "--build-arg", "NODE_IMAGE=$NodeImage"
+        # Skip provenance / SBOM attestation manifests: they're only useful for
+        # supply-chain tracing on registries that verify them (Docker Hub
+        # doesn't). Halves push volume and speeds up the auth round-trip.
+        "--provenance=false"
+        "--sbom=false"
         "-t", $FullImage
     )
 

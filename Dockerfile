@@ -50,7 +50,11 @@ RUN apt-get update && \
 
 
 COPY scrcpy-webrtc-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/scrcpy-webrtc-entrypoint.sh
+# Strip Windows CRLF line endings (left by COPYing from a Windows host); the
+# trailing \r turns the shebang into '#!/usr/bin/env bash\r', which the Linux
+# kernel can't exec — it reports 'exec format error' on the script path.
+RUN chmod +x /usr/local/bin/scrcpy-webrtc-entrypoint.sh \
+    && sed -i 's/\r$//' /usr/local/bin/scrcpy-webrtc-entrypoint.sh
 
 EXPOSE 8010
 ENTRYPOINT ["scrcpy-webrtc-entrypoint.sh"]

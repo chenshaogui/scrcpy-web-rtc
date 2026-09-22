@@ -3,11 +3,11 @@
 # Container entrypoint.
 #
 # ADB_HOST/ADB_PORT target the local adb-server (default 127.0.0.1:5037), which
-# the Node app talks to via @yume-chan/adb-server-node-tcp. Start one inside
-# the container so the connector always has something to reach.
+# the Node app talks to via @yume-chan/adb-server-node-tcp. Start one inside the
+# container so the connector always has something to reach.
 #
 # Optional ADB_DEVICE_HOST (+ ADB_DEVICE_PORT, default 5555) auto-connects a
-# wireless-adb device on startup — useful when the host's adb-server isn't
+# wireless-adb device on startup - useful when the host's adb-server isn't
 # reachable from inside the container.
 
 set -euo pipefail
