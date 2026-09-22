@@ -70,7 +70,7 @@ const STRINGS = {
         decodeError: (m) => `解码出错：${m}`,
         disconnected: "连接已断开",
         downshift: (p) => `网络受限，已降为${p}`,
-        backendPrompt: "后端地址（tango-mirror 服务的域名，如 xxx.relay.hapi.run）：",
+        backendPrompt: "后端地址（scrcpy-webrtc 服务的域名，如 xxx.relay.hapi.run）：",
         shell: "设备 Shell",
         close: "关闭",
         shellExited: (c) => `会话结束，退出码 ${c}`,
@@ -120,7 +120,7 @@ const STRINGS = {
         decodeError: (m) => `Decode error: ${m}`,
         disconnected: "Disconnected",
         downshift: (p) => `Network limited, switched to ${p}`,
-        backendPrompt: "Backend address (your tango-mirror server's domain, e.g. xxx.relay.hapi.run):",
+        backendPrompt: "Backend address (your scrcpy-webrtc server's domain, e.g. xxx.relay.hapi.run):",
         shell: "Device shell",
         close: "Close",
         shellExited: (c) => `session ended, exit code ${c}`,
@@ -134,8 +134,8 @@ const STRINGS = {
 
 // language: ?lang= param (persisted) > saved choice > browser language
 const langParam = new URLSearchParams(location.search).get("lang");
-if (langParam) localStorage.setItem("tango-lang", langParam);
-const LANG = (localStorage.getItem("tango-lang") || navigator.language || "en")
+if (langParam) localStorage.setItem("scrcpy-webrtc-lang", langParam);
+const LANG = (localStorage.getItem("scrcpy-webrtc-lang") || navigator.language || "en")
     .toLowerCase()
     .startsWith("zh") ? "zh" : "en";
 const t = STRINGS[LANG];
@@ -145,7 +145,7 @@ const t = STRINGS[LANG];
 // behind a tunnel; the URL param is the only way to point it elsewhere.
 const backendParam = new URLSearchParams(location.search).get("server");
 if (backendParam !== null) {
-    localStorage.setItem("tango-backend", backendParam.replace(/^[a-z]+:\/\//, "").replace(/\/$/, ""));
+    localStorage.setItem("scrcpy-webrtc-backend", backendParam.replace(/^[a-z]+:\/\//, "").replace(/\/$/, ""));
 }
 // serverless signaling (#k=… from a --signal host): the key stays in the
 // fragment — it never reaches any server, and the page needs it on reload
@@ -157,16 +157,16 @@ const SIGNAL = Boolean(SIGNAL_KEY);
 // from the URL so it doesn't linger in history or get shared along
 const tokenParam = new URLSearchParams(location.search).get("token") ?? frag.get("t");
 if (tokenParam !== null) {
-    localStorage.setItem("tango-token", tokenParam);
+    localStorage.setItem("scrcpy-webrtc-token", tokenParam);
     const clean = new URL(location.href);
     clean.searchParams.delete("token");
     frag.delete("t");
     clean.hash = frag.toString();
     history.replaceState(null, "", clean);
 }
-const TOKEN = localStorage.getItem("tango-token") || "";
+const TOKEN = localStorage.getItem("scrcpy-webrtc-token") || "";
 
-const BACKEND = localStorage.getItem("tango-backend") || "";
+const BACKEND = localStorage.getItem("scrcpy-webrtc-backend") || "";
 const HTTP_BASE = BACKEND ? `https://${BACKEND}` : "";
 const WS_BASE = BACKEND
     ? `wss://${BACKEND}`
@@ -175,7 +175,7 @@ const WS_BASE = BACKEND
 function promptBackend() {
     const input = prompt(t.backendPrompt, BACKEND);
     if (input === null) return;
-    localStorage.setItem("tango-backend", input.trim().replace(/^[a-z]+:\/\//, "").replace(/\/$/, ""));
+    localStorage.setItem("scrcpy-webrtc-backend", input.trim().replace(/^[a-z]+:\/\//, "").replace(/\/$/, ""));
     location.reload();
 }
 
@@ -183,7 +183,7 @@ function promptBackend() {
 // the host keeps device, quality, encoders and mute per connection, so every
 // reload used to reset them; keeping them in the page means coming back to the
 // device you were mirroring, at the quality you left it at
-const SESSION_KEY = "tango-session";
+const SESSION_KEY = "scrcpy-webrtc-session";
 const session = (() => {
     try {
         const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || "{}");
@@ -589,7 +589,7 @@ function connect(serial) {
         ws = signalChannel(serial);
     } else {
         const url = `${WS_BASE}/api/stream?serial=${encodeURIComponent(serial)}`;
-        ws = TOKEN ? new WebSocket(url, [`tango.token.${TOKEN}`]) : new WebSocket(url);
+        ws = TOKEN ? new WebSocket(url, [`scrcpy-webrtc.token.${TOKEN}`]) : new WebSocket(url);
     }
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
@@ -966,7 +966,7 @@ settingsBackdrop.onclick = () => setSettingsOpen(false);
 
 // ── the settings button is also a drag handle ──
 // a drag repositions it (and is remembered); a plain tap opens the sheet
-const FAB_POS_KEY = "tango-fab-pos";
+const FAB_POS_KEY = "scrcpy-webrtc-fab-pos";
 const fab = $("btn-settings");
 
 function placeFab(x, y) {

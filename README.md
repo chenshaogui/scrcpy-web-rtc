@@ -1,13 +1,13 @@
-# tango-mirror
+# scrcpy-webrtc
 
-[![npm](https://img.shields.io/npm/v/tango-mirror)](https://www.npmjs.com/package/tango-mirror)
-[![license](https://img.shields.io/npm/l/tango-mirror)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/scrcpy-webrtc)](https://www.npmjs.com/package/scrcpy-webrtc)
+[![license](https://img.shields.io/npm/l/scrcpy-webrtc)](./LICENSE)
 
 See and control your Android devices from any browser — including over the
 internet, without port forwarding.
 
 ```bash
-npx tango-mirror
+npx scrcpy-webrtc
 ```
 
 That prints a link (and a QR code) you can open anywhere. No tunnel, no
@@ -42,7 +42,7 @@ messages on public brokers, and video and touch travel peer-to-peer.
 **From anywhere (phone, another network)**
 
 ```bash
-npx tango-mirror
+npx scrcpy-webrtc
 ```
 
 Scan the QR code or open the printed link — it stays the same across
@@ -59,7 +59,7 @@ to stay strictly local, with nothing leaving the machine.
 **Through a tunnel instead**
 
 ```bash
-npx tango-mirror --tunnel
+npx scrcpy-webrtc --tunnel
 ```
 
 A tunnel gives you a public HTTPS address and, unlike signaling, a
@@ -71,7 +71,7 @@ Install [wush](https://github.com/coder/wush/releases) on both machines,
 then:
 
 ```bash
-npx tango-mirror --tunnel wush
+npx scrcpy-webrtc --tunnel wush
 ```
 
 Run the printed `wush port-forward …` command on the viewing machine and
@@ -83,7 +83,7 @@ this one is for laptops rather than phones.
 **With a shell on the device**
 
 ```bash
-npx tango-mirror --shell
+npx scrcpy-webrtc --shell
 ```
 
 Adds a `>_` button opening a real terminal on the device. This one requires
@@ -105,7 +105,7 @@ the token that's printed at startup — it's already embedded in the links.
 
 ## Options
 
-Run `tango-mirror --help` for the same list.
+Run `scrcpy-webrtc --help` for the same list.
 
 | Flag | Env | Default | |
 |---|---|---|---|
@@ -113,7 +113,7 @@ Run `tango-mirror --help` for the same list.
 | `--adb-host` | `ADB_HOST` | `127.0.0.1` | adb server host |
 | `--adb-port` | `ADB_PORT` | `5037` | adb server port |
 | `--shell` | — | off | enable the device shell (needs a token; generated if absent) |
-| `--token` | `TANGO_TOKEN` | off | require this token for *everything*, viewing included |
+| `--token` | `SCRCPY_WEBRTC_TOKEN` | off | require this token for *everything*, viewing included |
 | `--video-encoder` | `VIDEO_ENCODER` | device default | pin the video encoder by MediaCodec name (e.g. `c2.android.avc.encoder`); also switchable in the page |
 | `--audio-encoder` | `AUDIO_ENCODER` | device default | pin the audio encoder by MediaCodec name (e.g. `c2.android.opus.encoder`); only opus is playable over WebRTC |
 | `--tunnel [backend]` | — | off | expose publicly; `cloudflared`, `tunwg`, `wush`, or auto (prefers cloudflared) |
@@ -123,9 +123,9 @@ Run `tango-mirror --help` for the same list.
 | `--turn-auth` | `TURN_AUTH` | — | `user:pass` for a `--turn` URL |
 | `--signal` | — | on unless `--tunnel`/`--no-page` | remote access via public MQTT brokers + WebRTC; the flag forces it on |
 | `--no-signal` | — | — | strictly local: never touch a broker |
-| `--signal-broker` | `TANGO_SIGNAL_BROKERS` | 3 public brokers | comma-separated `wss://` broker list |
+| `--signal-broker` | `SCRCPY_WEBRTC_SIGNAL_BROKERS` | 3 public brokers | comma-separated `wss://` broker list |
 | — | `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` | — | Cloudflare TURN key, used by `--turn cloudflare` |
-| `--page` | `TANGO_PAGE` | project page | frontend to point remote visitors at |
+| `--page` | `SCRCPY_WEBRTC_PAGE` | project page | frontend to point remote visitors at |
 | `--no-page` | — | off | serve the bundled page instead |
 | `--no-qr` | — | off | don't print the QR code |
 | — | `TUNWG_BIN` | auto-detect | tunwg binary location |
@@ -137,7 +137,7 @@ overrides it.
 
 ## Troubleshooting
 
-**No devices listed** — run `adb devices` on the host. tango-mirror only sees
+**No devices listed** — run `adb devices` on the host. scrcpy-webrtc only sees
 what adb sees. For WiFi devices, `adb connect <ip>:5555` first.
 
 **"port 8010 is already in use"** — another copy is running; use `--port`.
@@ -173,16 +173,16 @@ page was opened without the token. Use the link printed at startup.
 clear a stale cached bundle.
 
 **`npx`/`bunx` runs an old version** — clear the runner's cache, e.g.
-`rm -rf /tmp/bunx-*-tango-mirror@latest`, or pin the version explicitly.
+`rm -rf /tmp/bunx-*-scrcpy-webrtc@latest`, or pin the version explicitly.
 
 ## How it works
 
 ```
-browser ◀── signaling: brokers or tunnel ──▶ tango-mirror (Node) ──▶ adb ──▶ device
+browser ◀── signaling: brokers or tunnel ──▶ scrcpy-webrtc (Node) ──▶ adb ──▶ device
    ╰────────────── WebRTC: video, audio, touch, shell ──────────────╯
 ```
 
-tango-mirror pushes the stock scrcpy v3.1 server to the device and starts it
+scrcpy-webrtc pushes the stock scrcpy v3.1 server to the device and starts it
 through adb, then relays what comes back. The device's hardware H.264 encoder
 output is **never transcoded** — it's repacketized as RTP and sent over
 WebRTC, or framed over the WebSocket as a fallback.
@@ -222,12 +222,12 @@ still demands the token.
 
 A remote viewer needs two small things before WebRTC can take over: a URL
 to open, and a way to exchange a few KB of SDP/ICE. Signaling provides
-both without any tunnel, and it is the default mode — plain `tango-mirror`
+both without any tunnel, and it is the default mode — plain `scrcpy-webrtc`
 runs it, `--no-signal` turns it off, and asking for a `--tunnel` replaces
 it (explicit `--signal` keeps both).
 
 The printed link is `<page>#k=<key>`. The key is generated locally and kept
-in `~/.config/tango-mirror/`, so the link is stable across restarts — and
+in `~/.config/scrcpy-webrtc/`, so the link is stable across restarts — and
 because it travels in the URL fragment, it is never sent to any server. Host
 and page meet on public MQTT brokers (EMQX intl + CN, HiveMQ by default;
 override with `--signal-broker`), where every message is AES-256-GCM
@@ -253,7 +253,7 @@ relay is yours:
 ```bash
 # Cloudflare TURN (1,000 GB/month free): create a TURN key under
 # Realtime → TURN in the Cloudflare dashboard, then
-CF_TURN_KEY_ID=… CF_TURN_API_TOKEN=… tango-mirror --turn cloudflare
+CF_TURN_KEY_ID=… CF_TURN_API_TOKEN=… scrcpy-webrtc --turn cloudflare
 ```
 
 `--turn` takes two forms: `cloudflare`, which mints short-lived credentials
@@ -282,12 +282,12 @@ shows video through the tunnel), or when you want a plain HTTPS URL. Bare
   stays the same across restarts and for end-to-end encryption (the relay
   can't see your traffic). Traffic flows through a tunwg relay —
   `relay.hapi.run` by default; use `--tunnel-api` for your own. If a relay
-  issues keys, one is fetched and cached under `~/.config/tango-mirror/`.
+  issues keys, one is fetched and cached under `~/.config/scrcpy-webrtc/`.
 - **[wush](https://github.com/coder/wush)** — for viewing from another
   computer: instead of a public URL, the viewing machine joins a WireGuard
   overlay (`wush port-forward`) and opens localhost. Direct P2P when
   possible, Tailscale's public DERP as fallback; end-to-end encrypted, no
-  accounts, nothing hosted. tango-mirror runs `wush serve` with ssh/cp
+  accounts, nothing hosted. scrcpy-webrtc runs `wush serve` with ssh/cp
   disabled, so the printed key only grants port-forwarding — still, treat
   it like a password while the server runs.
 
@@ -300,7 +300,7 @@ the server deliver the page itself with no external dependency.
 
 ## Built on
 
-[ya-webadb (Tango)](https://github.com/yume-chan/ya-webadb) for the ADB and
+[ya-webadb](https://github.com/yume-chan/ya-webadb) for the ADB and
 scrcpy protocols, [werift](https://github.com/shinyoshiaki/werift-webrtc) for
 WebRTC, [xterm.js](https://xtermjs.org/) for the terminal, and the stock
 [scrcpy](https://github.com/Genymobile/scrcpy) server.

@@ -42,15 +42,15 @@ function firstLanAddress() {
     return null;
 }
 
-const DEFAULT_PAGE = "https://weishu.me/tango-mirror/";
+const DEFAULT_PAGE = "https://weishu.me/scrcpy-webrtc/";
 // tunwg's own default relay (l.tunwg.com) is unreachable, so default to a
 // working one; --tunnel-api / TUNWG_API still win
 const DEFAULT_TUNWG_RELAY = "relay.hapi.run";
-const REPO_URL = "https://github.com/tiann/tango-mirror";
+const REPO_URL = "https://github.com/tiann/scrcpy-webrtc";
 
-const HELP = `tango-mirror — view and control Android devices from a browser
+const HELP = `scrcpy-webrtc — view and control Android devices from a browser
 
-Usage: tango-mirror [options]
+Usage: scrcpy-webrtc [options]
 
 Options:
   -p, --port <n>          HTTP/WebSocket listen port            (default 8010)
@@ -97,22 +97,22 @@ Options:
   -v, --version           show version
 
 Environment:
-  PORT, ADB_HOST, ADB_PORT, TANGO_TOKEN, TANGO_PAGE, VIDEO_ENCODER,
+  PORT, ADB_HOST, ADB_PORT, SCRCPY_WEBRTC_TOKEN, SCRCPY_WEBRTC_PAGE, VIDEO_ENCODER,
   AUDIO_ENCODER, TUNWG_API, TUNWG_BIN, CLOUDFLARED_PATH, WUSH_BIN, TURN_URL,
   TURN_AUTH,
-  CF_TURN_KEY_ID, CF_TURN_API_TOKEN, TANGO_SIGNAL_BROKERS
+  CF_TURN_KEY_ID, CF_TURN_API_TOKEN, SCRCPY_WEBRTC_SIGNAL_BROKERS
 
 Examples:
-  tango-mirror                                   # remote link via signaling + local
-  tango-mirror --turn cloudflare                 # + TURN for where P2P fails
-  tango-mirror --shell                           # + device shell (tokened)
-  tango-mirror --no-signal                       # strictly local
-  tango-mirror --tunnel                          # a tunnel instead of signaling
-  tango-mirror --tunnel wush                     # P2P to another computer
-  tango-mirror --shell --page https://me.github.io/tango-mirror/
+  scrcpy-webrtc                                   # remote link via signaling + local
+  scrcpy-webrtc --turn cloudflare                 # + TURN for where P2P fails
+  scrcpy-webrtc --shell                           # + device shell (tokened)
+  scrcpy-webrtc --no-signal                       # strictly local
+  scrcpy-webrtc --tunnel                          # a tunnel instead of signaling
+  scrcpy-webrtc --tunnel wush                     # P2P to another computer
+  scrcpy-webrtc --shell --page https://me.github.io/scrcpy-webrtc/
 
 The devices must already be visible to adb (adb connect <ip> / USB).
-Docs: https://github.com/tiann/tango-mirror`;
+Docs: https://github.com/tiann/scrcpy-webrtc`;
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(HELP);
@@ -145,7 +145,7 @@ const PORT = Number(argValue("--port", "-p") ?? process.env.PORT ?? 8010);
 const ADB_HOST = argValue("--adb-host") ?? process.env.ADB_HOST ?? "127.0.0.1";
 const ADB_PORT = Number(argValue("--adb-port") ?? process.env.ADB_PORT ?? 5037);
 const VERSION = "3.1"; // must match the bundled server.bin
-const SERVER_PATH = "/data/local/tmp/tango-scrcpy-server.jar";
+const SERVER_PATH = "/data/local/tmp/scrcpy-webrtc-server.jar";
 // MediaCodec name to pin the encoder to; empty means "whatever the device
 // picks first" — which on Rockchip images is often a c2.rk.* component that
 // isn't actually usable, so users need a way to force c2.android.avc.encoder.
@@ -172,7 +172,7 @@ const PKG_DIR = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(PKG_DIR, "public");
 
 const SHELL_ENABLED = process.argv.includes("--shell");
-const EXPLICIT_TOKEN = argValue("--token") ?? process.env.TANGO_TOKEN ?? "";
+const EXPLICIT_TOKEN = argValue("--token") ?? process.env.SCRCPY_WEBRTC_TOKEN ?? "";
 // an explicit token locks everything down; --shell alone only gates the
 // shell, so mirroring stays as frictionless as before
 const TOKEN = EXPLICIT_TOKEN || (SHELL_ENABLED ? randomBytes(16).toString("hex") : "");
@@ -181,7 +181,7 @@ const VIEW_NEEDS_TOKEN = Boolean(EXPLICIT_TOKEN);
 // from a CDN instead of eating tunnel bandwidth
 const PAGE_URL = process.argv.includes("--no-page")
     ? ""
-    : argValue("--page") ?? process.env.TANGO_PAGE ?? DEFAULT_PAGE;
+    : argValue("--page") ?? process.env.SCRCPY_WEBRTC_PAGE ?? DEFAULT_PAGE;
 
 // Without TURN, a viewer that can't get a direct WebRTC path (symmetric
 // NAT, CGNAT) falls back to video over the WebSocket — the whole stream
@@ -264,7 +264,7 @@ function isLocalRequest(req) {
     return LOCAL_HOST.test(host);
 }
 
-const TOKEN_PROTOCOL = "tango.token.";
+const TOKEN_PROTOCOL = "scrcpy-webrtc.token.";
 
 function tokenValid(given) {
     if (!TOKEN) return true;
@@ -296,7 +296,7 @@ const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt
 function interstitial(target, zh) {
     const t = zh
         ? {
-            title: "打开 tango-mirror",
+            title: "打开 scrcpy-webrtc",
             lead: "前端页面不通过隧道分发，以免占用隧道带宽（约 400 KB）。点击下面的链接从 CDN 打开，后端地址和 token 已经填好：",
             open: "打开控制台",
             selfHostTitle: "想用自己的前端？",
@@ -309,7 +309,7 @@ function interstitial(target, zh) {
             offline: "如果只在内网或离线使用，用 <code>--no-page</code> 让本服务直接提供页面，不依赖任何外部站点。",
         }
         : {
-            title: "Open tango-mirror",
+            title: "Open scrcpy-webrtc",
             lead: "The frontend isn't served through the tunnel, to keep ~400 KB of bundle off it. Open it from the CDN below — the backend address and token are already filled in:",
             open: "Open console",
             selfHostTitle: "Prefer your own frontend?",
@@ -396,10 +396,13 @@ const httpServer = createServer(async (req, res) => {
     }
     if (url.pathname === "/api/devices") {
         try {
+            const devices = await listDevices();
             res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify(await listDevices()));
+            res.end(JSON.stringify(devices));
         } catch (e) {
-            res.writeHead(500, { "content-type": "application/json" });
+            if (!res.headersSent) {
+                res.writeHead(500, { "content-type": "application/json" });
+            }
             res.end(JSON.stringify({ error: String(e) }));
         }
         return;
@@ -1039,7 +1042,7 @@ class SignalSocket extends EventEmitter {
 }
 
 async function signalKey() {
-    const file = join(homedir(), ".config", "tango-mirror", "signal-key");
+    const file = join(homedir(), ".config", "scrcpy-webrtc", "signal-key");
     try {
         const key = b64u.decode((await readFile(file, "utf8")).trim());
         if (key.length === 32) return key; // stable key -> stable link
@@ -1052,7 +1055,7 @@ async function signalKey() {
 
 async function startSignal() {
     const key = await signalKey();
-    const brokers = (argValue("--signal-broker") ?? process.env.TANGO_SIGNAL_BROKERS)
+    const brokers = (argValue("--signal-broker") ?? process.env.SCRCPY_WEBRTC_SIGNAL_BROKERS)
         ?.split(",").map((s) => s.trim()).filter(Boolean) ?? DEFAULT_BROKERS;
     const room = await SignalRoom.create({
         key,
@@ -1082,7 +1085,7 @@ async function startSignal() {
             sessions.set(sid, sock);
             handleSession(sock, {
                 url: `/api/stream?serial=${encodeURIComponent(msg.serial ?? "")}`,
-                headers: { "sec-websocket-protocol": msg.token ? `tango.token.${msg.token}` : "" },
+                headers: { "sec-websocket-protocol": msg.token ? `scrcpy-webrtc.token.${msg.token}` : "" },
             });
         } else if (msg.t === "bye") {
             sessions.get(sid)?.close();
@@ -1145,7 +1148,7 @@ const tunwgRelay = () =>
 
 // some tunwg relays require an auth key from POST /issue; fetch once and cache
 async function issueTunwgKey(api) {
-    const cacheDir = join(homedir(), ".config", "tango-mirror");
+    const cacheDir = join(homedir(), ".config", "scrcpy-webrtc");
     const cacheFile = join(cacheDir, `tunwg-auth-${api.replace(/[^A-Za-z0-9.-]/g, "_")}`);
     if (existsSync(cacheFile)) return (await readFile(cacheFile, "utf8")).trim();
     const res = await fetch(`https://${api}/issue`, { method: "POST" });
@@ -1277,7 +1280,7 @@ async function startTunnel(backendName) {
     // a missing or unrunnable binary must not take the whole server down
     child.on("error", (e) => {
         console.error(`\ncannot run ${name} (${bin}): ${e.message}`);
-        console.error(`tango-mirror is still serving on http://localhost:${PORT}\n`);
+        console.error(`scrcpy-webrtc is still serving on http://localhost:${PORT}\n`);
     });
     child.on("exit", (code) => {
         if (shuttingDown) return;
@@ -1295,7 +1298,7 @@ async function startTunnel(backendName) {
                 "if it is unreachable, or run your own (see the tunwg README).",
             );
         }
-        console.error(`tango-mirror is still serving on http://localhost:${PORT}\n`);
+        console.error(`scrcpy-webrtc is still serving on http://localhost:${PORT}\n`);
     });
     const cleanup = () => {
         shuttingDown = true;
@@ -1341,8 +1344,8 @@ function printOpenUrls(publicUrl) {
 const handleListenError = (e) => {
     if (e.code === "EADDRINUSE") {
         console.error(
-            `port ${PORT} is already in use — another tango-mirror may be running.\n` +
-            `pick a different one with --port, e.g. tango-mirror --port ${PORT + 1}`,
+            `port ${PORT} is already in use — another scrcpy-webrtc may be running.\n` +
+            `pick a different one with --port, e.g. scrcpy-webrtc --port ${PORT + 1}`,
         );
     } else if (e.code === "EACCES") {
         console.error(`not allowed to listen on port ${PORT}; try a port above 1024`);
@@ -1359,7 +1362,7 @@ wss.on("error", handleListenError);
 // it explicit and lets us print the LAN URL for nearby devices.)
 const BIND_HOST = "0.0.0.0";
 httpServer.listen(PORT, BIND_HOST, () => {
-    console.log(`tango-mirror listening on http://${BIND_HOST}:${PORT} (scrcpy server v${VERSION})`);
+    console.log(`scrcpy-webrtc listening on http://${BIND_HOST}:${PORT} (scrcpy server v${VERSION})`);
     const lan = firstLanAddress();
     if (lan) console.log(`  open from LAN: http://${lan}:${PORT}/`);
     if (SHELL_ENABLED) {

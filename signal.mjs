@@ -80,7 +80,7 @@ class MqttClient {
         this.#buf = new Uint8Array(0);
         ws.binaryType = "arraybuffer";
         ws.onopen = () => {
-            const id = `tango-${hex(crypto.getRandomValues(new Uint8Array(8)))}`;
+            const id = `scrcpy-webrtc-${hex(crypto.getRandomValues(new Uint8Array(8)))}`;
             ws.send(mqttPacket(0x10, [...mqttStr("MQTT"), 4, 0x02, 0, 60, ...mqttStr(id)]));
         };
         ws.onmessage = (ev) => this.#feed(new Uint8Array(ev.data));
@@ -187,12 +187,12 @@ export class SignalRoom {
         room.#log = log;
         room.#key = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt", "decrypt"]);
         const digest = new Uint8Array(
-            await crypto.subtle.digest("SHA-256", enc.encode(`tango-mirror-room:${b64u.encode(key)}`)),
+            await crypto.subtle.digest("SHA-256", enc.encode(`scrcpy-webrtc-room:${b64u.encode(key)}`)),
         );
         const rid = hex(digest.subarray(0, 10));
         const me = role === "host" ? "h" : "v";
-        room.#pub = `tango-mirror/${rid}/${me}`;
-        const sub = `tango-mirror/${rid}/${me === "h" ? "v" : "h"}`;
+        room.#pub = `scrcpy-webrtc/${rid}/${me}`;
+        const sub = `scrcpy-webrtc/${rid}/${me === "h" ? "v" : "h"}`;
 
         let onReady;
         const ready = new Promise((r) => { onReady = r; });

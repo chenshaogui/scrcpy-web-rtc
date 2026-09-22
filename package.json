@@ -1,10 +1,10 @@
 {
-  "name": "tango-mirror",
+  "name": "scrcpy-webrtc",
   "version": "0.6.0",
-  "description": "View and control WiFi-connected Android devices from a browser. Self-hosted scrcpy over WebRTC P2P built on ya-webadb (Tango): video, audio, clipboard sync and an optional device shell.",
+  "description": "View and control WiFi-connected Android devices from a browser. Self-hosted scrcpy over WebRTC P2P built on ya-webadb: video, audio, clipboard sync and an optional device shell.",
   "type": "module",
   "bin": {
-    "tango-mirror": "server.mjs"
+    "scrcpy-webrtc": "server.mjs"
   },
   "files": [
     "server.mjs",
@@ -27,18 +27,17 @@
     "screen-mirroring",
     "adb",
     "ya-webadb",
-    "tango",
     "webcodecs"
   ],
   "author": "weishu <twsxtd@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/tiann/tango-mirror#readme",
+  "homepage": "https://github.com/tiann/scrcpy-webrtc#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tiann/tango-mirror.git"
+    "url": "git+https://github.com/tiann/scrcpy-webrtc.git"
   },
   "bugs": {
-    "url": "https://github.com/tiann/tango-mirror/issues"
+    "url": "https://github.com/tiann/scrcpy-webrtc/issues"
   },
   "engines": {
     "node": ">=20"

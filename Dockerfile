@@ -1,65 +1,53 @@
-ARG NODE_VERSION=22
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22.23.2-slim
 
-# ---------------------------------------------------------------------------
-# stage 1 — browser bundle (esbuild) and the scrcpy server jar (server.bin)
-# ---------------------------------------------------------------------------
-FROM node:${NODE_VERSION}-bookworm-slim
-# must match VERSION in server.mjs
-ARG SCRCPY_VERSION=3.1
+LABEL maintainer="sgchen <1451023420@qq.com>"
+LABEL description="scrcpy - Web-based scrcpy client"
+LABEL version="1.0"
+
+ENV LANG=C.UTF-8
+ENV HOST=0.0.0.0
+ENV PORT=8010
+ENV NODE_ENV=production
+ENV ADB_HOST=127.0.0.1
+ENV ADB_PORT=5037
+# China-friendly mirrors so the build doesn't hang on npmjs.org / GitHub
+ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+# esbuild >= 0.16 ignores .npmrc; this env var is what install.js actually reads
+ENV ESBUILD_BINARY_MIRROR=https://registry.npmmirror.com/-/binary/esbuild
+
+
+COPY . /app
 WORKDIR /app
 
 # 更换为清华镜像源
 RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
     sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
 
-# 安装 ADB 工具
+
 RUN apt-get update && \
-    apt-get install -y \
-        android-tools-adb \
-        python3 \
-        python3-pip \
-        make \
-        g++ \
-        gcc \
-        libc6-dev \
-        build-essential \
-        && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends android-tools-adb curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    # NODE_ENV=production above makes npm skip devDeps; force-install them for esbuild
+    npm ci --include=dev && \
+    npm run build && \
+    # Pull scrcpy-server jar straight from the Genymobile release with curl (much
+    # more forgiving retries than got/gh-release-fetch, which dies on a single
+    # TLS reset during Docker's network setup). 30 retries * 5 s covers the
+    # usual GitHub-CDN hiccups. Then we re-create the package's index.js /
+    # version.js so server.mjs can still `import { BIN } from '@yume-chan/fetch-scrcpy-server'`.
+    curl -fSL --retry 30 --retry-delay 5 --retry-all-errors \
+        --connect-timeout 15 --max-time 600 \
+        -o node_modules/@yume-chan/fetch-scrcpy-server/server.bin \
+        https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1 && \
+    printf "export const VERSION = '3.1';\nexport const BIN = /* #__PURE__ */ new URL('./server.bin', import.meta.url);\n" \
+        > node_modules/@yume-chan/fetch-scrcpy-server/index.js && \
+    printf "export const VERSION = '3.1';\n" \
+        > node_modules/@yume-chan/fetch-scrcpy-server/version.js
 
-COPY . .
 
-# 使用标准 npm + 淘宝镜像，避免 cnpm 生成的 esbuild 启动脚本把 ELF 当 JS 解析
-RUN npm config set registry https://registry.npmmirror.com
-
-# 安装依赖
-RUN npm install
-
-# 确保 esbuild 的原生二进制被 npm 正确链接（覆盖 cnpm/异常安装可能留下的错误包装脚本）
-RUN npm install esbuild --no-save --registry=https://registry.npmmirror.com
-
-# 构建前端 + 下载 scrcpy server
-RUN npm run build \
- && npx --yes fetch-scrcpy-server "${SCRCPY_VERSION}"
-
-ENV NODE_ENV=production \
-    PORT=8010 \
-    ADB_HOST=127.0.0.1 \
-    ADB_PORT=5555
-
-# the app speaks to an adb *server* over TCP (ADB_HOST:ADB_PORT) and never
-# spawns the adb binary itself, so start one inside the container and hand it
-# the device list before node boots
-COPY tango-entrypoint.sh /usr/local/bin/tango-entrypoint
-
-RUN sed -i 's/\r$//' /usr/local/bin/tango-entrypoint \
- && chmod +x /usr/local/bin/tango-entrypoint
+COPY scrcpy-webrtc-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/scrcpy-webrtc-entrypoint.sh
 
 EXPOSE 8010
-# adb keys, so device authorizations survive a container rebuild
-VOLUME ["/root/.android"]
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8010)+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
-
-ENTRYPOINT ["tango-entrypoint"]
+ENTRYPOINT ["scrcpy-webrtc-entrypoint.sh"]
 CMD ["node", "server.mjs", "--no-page", "--no-signal"]
