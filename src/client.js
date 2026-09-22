@@ -79,6 +79,14 @@ const STRINGS = {
         signalDown: "联系不到主机",
         signalDownHint: "确认主机正以 --signal 运行且在线，然后刷新",
         p2pFailed: "P2P 连接失败 — 在主机侧加 --turn 可解决",
+        customOptions: "自定义 scrcpy 参数",
+        customOptionsHint: "留空跟随画质预设；非空值会覆盖对应参数",
+        optExtra: "其他参数 (键值对)",
+        optAdd: "+",
+        optApply: "应用",
+        optReset: "重置",
+        optInvalidExtra: "键值对格式错误",
+        audioAutoDisabled: "设备音频不可用，已自动关闭",
     },
     en: {
         refresh: "Refresh devices",
@@ -129,6 +137,14 @@ const STRINGS = {
         signalDown: "Can't reach the host",
         signalDownHint: "Make sure the host is running with --signal, then refresh",
         p2pFailed: "P2P failed — add --turn on the host to fix this",
+        customOptions: "Custom scrcpy options",
+        customOptionsHint: "Empty fields follow the quality preset; non-empty values override",
+        optExtra: "Other options (key/value)",
+        optAdd: "+",
+        optApply: "Apply",
+        optReset: "Reset",
+        optInvalidExtra: "Invalid key/value",
+        audioAutoDisabled: "Device audio unavailable — auto-disabled",
     },
 };
 
@@ -243,7 +259,11 @@ for (const [id, key] of [
     ["label-sound", "sound"], ["label-fullscreen", "fullscreen"],
     ["label-power", "power"], ["label-back", "back"], ["label-home", "home"],
     ["label-recents", "recents"], ["label-kbd", "keyboard"], ["label-shell", "shell"],
+    ["label-custom-options", "customOptions"], ["label-opt-extra", "optExtra"],
 ]) $(id).textContent = t[key];
+$("opt-extra-add").textContent = t.optAdd;
+$("opt-apply").textContent = t.optApply;
+$("opt-reset").textContent = t.optReset;
 for (const opt of qualitySelect.options) {
     opt.textContent = { auto: t.qAuto, low: t.qLow, medium: t.qMedium, high: t.qHigh }[opt.value];
 }
@@ -358,7 +378,14 @@ let videoEl = null;
 let path = "ws"; // "ws" | "rtc"
 let statsTimer = null;
 let lastSize = "";
-let muted = session.muted ?? true;
+// always start muted on a fresh page load — autoplay policy would otherwise
+// reject the first audio.play() with NotAllowedError, and silent-by-default
+// matches what most users want anyway
+let muted = true;
+// whether the device should send an audio track at all — separate from
+// browser-side muted. Some Android devices (notably redroid on 13+) ship an
+// opus encoder that crashes on start; turning this off skips audio entirely.
+let audioEnabled = session.audioEnabled !== false;
 let lastClipFromDevice = null;
 let lastClipToDevice = null;
 
@@ -578,6 +605,7 @@ function restoreSession(serial) {
     const enc = savedEncoders(serial);
     if (enc.video) sendWs({ t: "encoder", name: enc.video });
     if (enc.audio) sendWs({ t: "audio-encoder", name: enc.audio, codec: enc.audioCodec ?? "" });
+    if (session.customOptions) sendWs({ t: "options", options: session.customOptions });
 }
 
 function connect(serial) {
@@ -606,6 +634,14 @@ function connect(serial) {
                 $("btn-shell").hidden = !msg.shell;
                 if (msg.preset) qualitySelect.value = msg.auto ? "auto" : msg.preset;
                 if (path !== "rtc") setBadge("WS");
+                // the server only sets audio=false when it had to auto-disable
+                // it after the device's codec crashed; reflect that in the UI
+                if (msg.audio === false) {
+                    audioEnabled = false;
+                    rememberSession({ audioEnabled });
+                    paintSoundButton();
+                    setBadge(t.audioAutoDisabled, "warn");
+                }
                 sendWs({ t: "encoder", list: true }); // this device's encoders
             } else if (msg.type === "encoders") {
                 if (msg.error) setBadge(t.encoderListFailed(msg.error), "error");
@@ -1062,19 +1098,183 @@ audioEncoderSelect.onchange = () => {
     sendWs({ t: "audio-encoder", name: audioEncoderSelect.value, codec });
 };
 
+// ── custom scrcpy options ────────────────────────────────
+// hand-tuned overrides that beat both the quality preset and the dedicated
+// encoder fields above; empty fields fall back to whatever the preset chose
+const OPT_FIELDS = [
+    { key: "maxSize", id: "opt-max-size", kind: "number" },
+    // Mbps in the UI, bps on the wire — scrcpy-server's option is in bps and
+    // users reason in Mbps, so convert at the boundary
+    { key: "videoBitRate", id: "opt-video-bit-rate", kind: "mbps" },
+    { key: "maxFps", id: "opt-max-fps", kind: "number" },
+    { key: "videoCodec", id: "opt-video-codec", kind: "select" },
+    { key: "videoEncoder", id: "opt-video-encoder", kind: "string" },
+    { key: "audioEncoder", id: "opt-audio-encoder", kind: "string" },
+    { key: "audioBitRate", id: "opt-audio-bit-rate", kind: "number" },
+    { key: "screenOffTimeout", id: "opt-screen-off-timeout", kind: "number" },
+];
+const BUILTIN_KEYS = new Set(OPT_FIELDS.map((f) => f.key));
+
+function readCustomOptions() {
+    const out = {};
+    for (const f of OPT_FIELDS) {
+        const el = $(f.id);
+        if (!el) continue;
+        const v = el.value.trim();
+        if (!v) continue;
+        if (f.kind === "number") {
+            const n = Number(v);
+            if (!Number.isFinite(n)) continue;
+            out[f.key] = n;
+        } else if (f.kind === "mbps") {
+            const n = Number(v);
+            if (!Number.isFinite(n) || n <= 0) continue;
+            out[f.key] = Math.round(n * 1_000_000);
+        } else {
+            out[f.key] = v;
+        }
+    }
+    for (const row of $("opt-extra-list").querySelectorAll(".opt-extra-row")) {
+        const k = row.querySelector(".opt-k").value.trim();
+        const v = row.querySelector(".opt-v").value.trim();
+        if (!k) continue;
+        const n = Number(v);
+        if (v !== "" && Number.isFinite(n) && String(n) === v) out[k] = n;
+        else out[k] = v;
+    }
+    return out;
+}
+
+function writeCustomOptions(obj) {
+    obj = obj || {};
+    for (const f of OPT_FIELDS) {
+        const el = $(f.id);
+        if (!el) continue;
+        if (f.key in obj) {
+            const v = obj[f.key];
+            el.value = f.kind === "mbps" && typeof v === "number"
+                ? String(Math.round((v / 1_000_000) * 10) / 10)
+                : String(v);
+        } else {
+            el.value = "";
+        }
+    }
+    const list = $("opt-extra-list");
+    list.innerHTML = "";
+    for (const [k, v] of Object.entries(obj)) {
+        if (BUILTIN_KEYS.has(k)) continue;
+        addExtraRow(k, v);
+    }
+    updateCustomOptionsCount();
+}
+
+function addExtraRow(k = "", v = "") {
+    const list = $("opt-extra-list");
+    const row = document.createElement("div");
+    row.className = "opt-extra-row";
+    const ki = document.createElement("input");
+    ki.className = "opt-k";
+    ki.placeholder = "key";
+    ki.value = k;
+    const vi = document.createElement("input");
+    vi.className = "opt-v";
+    vi.placeholder = "value";
+    vi.value = String(v);
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "mini";
+    rm.textContent = "✕";
+    rm.onclick = () => { row.remove(); updateCustomOptionsCount(); };
+    row.append(ki, vi, rm);
+    list.appendChild(row);
+}
+
+function updateCustomOptionsCount() {
+    const n = Object.keys(readCustomOptions()).length;
+    const tag = $("custom-options-count");
+    if (!tag) return;
+    tag.hidden = n === 0;
+    tag.textContent = n === 1 ? "(1 项)" : `(${n} 项)`;
+}
+
+function sendCustomOptions() {
+    const opts = readCustomOptions();
+    // the audio toggle owns the `audio` field — make sure extra-row edits
+    // can't shadow it
+    if (!audioEnabled) opts.audio = false;
+    else delete opts.audio;
+    rememberSession({ customOptions: opts, audioEnabled });
+    sendWs({ t: "options", options: opts });
+    updateCustomOptionsCount();
+}
+
+writeCustomOptions(session.customOptions);
+$("opt-apply").onclick = sendCustomOptions;
+$("opt-reset").onclick = () => { writeCustomOptions(null); sendCustomOptions(); };
+$("opt-extra-add").onclick = () => addExtraRow();
+for (const f of OPT_FIELDS) {
+    const el = $(f.id);
+    if (el) el.addEventListener("change", updateCustomOptionsCount);
+}
+
 // shows the remembered state before the first click
 $("btn-mute").textContent = muted ? "🔇" : "🔊";
-$("btn-mute").onclick = () => {
+function paintSoundButton() {
+    const b = $("btn-mute");
+    // device audio off takes precedence in the icon — that's the unusual state
+    if (!audioEnabled) {
+        b.textContent = "🚫";
+        b.classList.add("off");
+        b.title = "设备音频已关闭（长按恢复）";
+    } else {
+        b.textContent = muted ? "🔇" : "🔊";
+        b.classList.remove("off");
+        b.title = muted ? "已静音（单击发声，长按关闭设备音频）"
+                        : "有声（单击静音，长按关闭设备音频）";
+    }
+}
+paintSoundButton();
+
+// one button, two gestures:
+//   tap     → toggle browser-side muted (videoEl.muted)
+//   long-press (≥600ms) → toggle device-side audio (server restart)
+let soundPressTimer = null;
+function cancelSoundPress() {
+    if (soundPressTimer) {
+        clearTimeout(soundPressTimer);
+        soundPressTimer = null;
+    }
+}
+$("btn-mute").addEventListener("pointerdown", () => {
+    cancelSoundPress();
+    soundPressTimer = setTimeout(() => {
+        soundPressTimer = null;
+        audioEnabled = !audioEnabled;
+        rememberSession({ audioEnabled });
+        paintSoundButton();
+        const opts = readCustomOptions();
+        if (!audioEnabled) opts.audio = false;
+        else delete opts.audio;
+        writeCustomOptions(opts);
+        sendCustomOptions();
+    }, 600);
+});
+$("btn-mute").addEventListener("pointerup", () => {
+    if (!soundPressTimer) return; // long-press already fired
+    cancelSoundPress();
     muted = !muted;
-    rememberSession({ muted });
-    $("btn-mute").textContent = muted ? "🔇" : "🔊";
+    // not persisted: every new tab/session begins silent so the browser's
+    // autoplay policy is satisfied without a NotAllowedError on first play
+    paintSoundButton();
     // both audio and video tracks live on videoEl — toggle its muted
     // property to switch audio playback
     if (videoEl) {
         videoEl.muted = muted;
         videoEl.play?.().catch(() => {});
     }
-};
+});
+$("btn-mute").addEventListener("pointerleave", cancelSoundPress);
+$("btn-mute").addEventListener("pointercancel", cancelSoundPress);
 
 // clipboard sync: browser -> device on tab focus (permission permitting)
 window.addEventListener("focus", async () => {

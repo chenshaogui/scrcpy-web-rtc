@@ -473,6 +473,67 @@ const QUALITY_PRESETS = {
 };
 const PRESET_ORDER = ["low", "medium", "high"];
 
+// whitelist of scrcpy 3.1 options the page is allowed to set by name. Anything
+// not in here is silently dropped — this both stops a typo from breaking the
+// session and gives the page a single place to learn what's tunable.
+const ALLOWED_CUSTOM_OPTIONS = {
+    // video
+    maxSize: "number",
+    videoBitRate: "number",
+    videoCodec: { oneOf: ["h264", "h265", "av1"] },
+    videoEncoder: "string",
+    videoCodecOptions: "string",
+    maxFps: "number",
+    // audio
+    audio: "boolean",
+    audioCodec: { oneOf: ["raw", "opus", "aac"] },
+    audioEncoder: "string",
+    audioBitRate: "number",
+    audioCodecOptions: "string",
+    audioSource: { oneOf: ["output", "mic"] },
+    // capture / behaviour
+    captureOrientation: "string",
+    angle: "number",
+    screenOffTimeout: "number",
+    displayId: "number",
+    newDisplay: "string",
+    crop: "string",
+    showTouches: "boolean",
+    stayAwake: "boolean",
+    powerOn: "boolean",
+    powerOffOnClose: "boolean",
+    clipboardAutosync: "boolean",
+    control: "boolean",
+    tunnelForward: "boolean",
+    logLevel: { oneOf: ["verbose", "debug", "info", "warn", "error"] },
+};
+
+function sanitizeCustomOptions(input) {
+    if (!input || typeof input !== "object") return null;
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+        if (!(k in ALLOWED_CUSTOM_OPTIONS)) continue;
+        if (v === "" || v === undefined || v === null) continue;
+        const spec = ALLOWED_CUSTOM_OPTIONS[k];
+        if (typeof spec === "string") {
+            if (spec === "number") {
+                const n = Number(v);
+                if (!Number.isFinite(n)) continue;
+                out[k] = n;
+            } else if (spec === "boolean") {
+                if (typeof v === "boolean") out[k] = v;
+                else if (v === "true" || v === true) out[k] = true;
+                else if (v === "false" || v === false) out[k] = false;
+            } else if (spec === "string") {
+                out[k] = String(v);
+            }
+        } else if (spec.oneOf) {
+            if (spec.oneOf.includes(v)) out[k] = v;
+        }
+    }
+    return Object.keys(out).length ? out : null;
+}
+
 wss.on("connection", handleSession);
 
 // the whole session speaks through ws.send/on("message")/close/readyState,
@@ -513,6 +574,14 @@ async function handleSession(ws, req) {
     // component, and only opus survives the WebRTC audio track
     let audioEncoder = AUDIO_ENCODER;
     let audioCodec = codecFromEncoderName(AUDIO_ENCODER) || "opus";
+    // user-supplied scrcpy options that override QUALITY_PRESETS — populated
+    // by `t: "options"` from the page; null means "follow the preset"
+    let customOptions = null;
+    // some devices (notably redroid on Android 13+) ship a MediaCodec that
+    // crashes the audio-encoder thread as soon as it tries to start. That
+    // kills the whole scrcpy session in a restart loop, leaving the screen
+    // black. Set when we see the crash, and force `audio: false` from then on
+    let audioBroken = false;
     let ensurePushed = null; // set once adb is up: the server jar self-deletes
     let encoderListBusy = null;
     let encoderList = null; // probed once per connection, then reused
@@ -778,6 +847,18 @@ async function handleSession(ws, req) {
                     requestRestart();
                 }
             }
+        } else if (msg.t === "options") {
+            // sanitise — only plain key/value pairs, no functions or nested
+            // objects, and ignore unknown keys. The user gets a generous
+            // knob set; anything that maps to a real AdbScrcpy option wins.
+            const next = sanitizeCustomOptions(msg.options);
+            const before = JSON.stringify(customOptions);
+            const after = JSON.stringify(next);
+            if (before !== after) {
+                customOptions = next;
+                log(`custom options -> ${after}`);
+                requestRestart();
+            }
         } else if (msg.t === "encoder") {
             if (msg.list) {
                 listEncoders().catch((e) => log("encoder list error:", e.message));
@@ -859,7 +940,9 @@ async function handleSession(ws, req) {
             // collide with the previous server instance still shutting down
             const makeOptions = () => new AdbScrcpyOptions3_1({
                 scid: ScrcpyInstanceId.random(),
-                audio: true,
+                // the device's audio encoder crashed on start — leave it off
+                // for the rest of this connection so we stop the restart loop
+                audio: audioBroken ? false : true,
                 audioCodec,
                 clipboardAutosync: true,
                 // omitted entirely when unpinned, so scrcpy-server keeps
@@ -867,6 +950,9 @@ async function handleSession(ws, req) {
                 ...(videoEncoder ? { videoEncoder } : {}),
                 ...(audioEncoder ? { audioEncoder } : {}),
                 ...QUALITY_PRESETS[preset],
+                // custom overrides last — wins over both the preset and the
+                // dedicated encoder fields above
+                ...(customOptions ?? {}),
             });
             scrcpy = null;
             for (let attempt = 0; ; attempt++) {
@@ -901,6 +987,15 @@ async function handleSession(ws, req) {
                         active: true,
                     });
                 }
+                // Catch the "audio-encoder thread crashed with CodecException"
+                // pattern redroid/Android 13+ ships. Without this guard the
+                // whole scrcpy session keeps restarting (no video on screen).
+                if (!audioBroken && /Exception on thread Thread\[audio-encoder[^\]]*\]/.test(line)) {
+                    audioBroken = true;
+                    log("device audio encoder crashed — disabling audio and restarting");
+                    sendSignal({ type: "audio", active: false });
+                    requestRestart();
+                }
             })).catch(() => {});
 
             video = await current.videoStream;
@@ -916,6 +1011,7 @@ async function handleSession(ws, req) {
                 auto: autoQuality,
                 encoder: videoEncoder,
                 shell: SHELL_ENABLED && authed,
+                audio: !audioBroken,
             });
             video.sizeChanged((size) => sendSignal({ type: "size", ...size }));
 

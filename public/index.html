@@ -151,6 +151,7 @@
         touch-action: manipulation;
     }
     .row .mini:active { background: #232a36; }
+    .row .mini.off { opacity: 0.4; }
     /* a row whose only control is a hidden encoder picker is just a label */
     .row:has(> select[hidden]) { display: none; }
 
@@ -303,6 +304,106 @@
         touch-action: manipulation;
     }
 
+    /* ── custom scrcpy options (collapsible) ──── */
+    .custom-options {
+        border-bottom: 1px solid #20252f;
+        padding: 0 0 12px;
+    }
+    .custom-options > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 12px 16px;
+        font-size: 15px;
+        color: #cdd3dd;
+        position: relative;
+    }
+    .opt-count {
+        margin-left: 8px;
+        font-size: 12px;
+        color: #7ea6f5;
+    }
+    .custom-options > summary::-webkit-details-marker { display: none; }
+    .custom-options > summary::after {
+        content: "▸";
+        position: absolute;
+        right: 16px;
+        transition: transform .15s ease;
+        color: #8b93a1;
+    }
+    .custom-options[open] > summary::after { transform: rotate(90deg); }
+    .opt-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 12px;
+        padding: 0 16px 8px;
+    }
+    .opt-grid label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: #8b93a1;
+    }
+    .opt-grid input,
+    .opt-grid select,
+    .opt-extra input {
+        height: 34px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid #2a2f3a;
+        background: #0f1115;
+        color: inherit;
+        font-size: 14px;
+        appearance: none;
+    }
+    .opt-grid select { padding-right: 22px; }
+    .opt-extra {
+        margin: 0 16px 8px;
+        border: 1px solid #2a2f3a;
+        border-radius: 10px;
+        background: #0f1115;
+    }
+    .opt-extra > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #8b93a1;
+        position: relative;
+    }
+    .opt-extra > summary::-webkit-details-marker { display: none; }
+    .opt-extra > summary::after {
+        content: "▸";
+        position: absolute;
+        right: 12px;
+        color: #8b93a1;
+    }
+    .opt-extra[open] > summary::after { transform: rotate(90deg); }
+    .opt-extra-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 0 8px 8px;
+    }
+    .opt-extra-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+    .opt-extra-row input { flex: 1; min-width: 0; }
+    .opt-extra-row .mini {
+        min-width: 32px;
+        height: 32px;
+        padding: 0 8px;
+        font-size: 13px;
+    }
+    .opt-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        padding: 0 16px;
+    }
+
     /* ── remote keys, as tiles inside the sheet ── */
     .tiles {
         display: grid;
@@ -391,12 +492,44 @@
     </div>
     <div class="row">
         <label id="label-sound" for="btn-mute">声音</label>
-        <button id="btn-mute" class="mini" title="声音">🔇</button>
+        <button id="btn-mute" class="mini" title="单击静音/取消，长按关闭/打开设备音频">🔇</button>
     </div>
     <div class="row">
         <label id="label-fullscreen" for="btn-fullscreen">全屏</label>
         <button id="btn-fullscreen" class="mini" title="全屏">⛶</button>
     </div>
+    <details id="custom-options" class="custom-options">
+        <summary>
+            <span id="label-custom-options">自定义 scrcpy 参数</span>
+            <span id="custom-options-count" class="opt-count" hidden></span>
+        </summary>
+        <div class="opt-grid">
+            <label><span>max-size</span><input type="number" id="opt-max-size" min="0" step="1" placeholder="留空跟随画质"></label>
+            <label><span>video-bit-rate (Mbps)</span><input type="number" id="opt-video-bit-rate" min="0" step="0.1" placeholder="留空跟随画质"></label>
+            <label><span>max-fps (0=不限)</span><input type="number" id="opt-max-fps" min="0" step="1" placeholder="不限"></label>
+            <label><span>video-codec</span>
+                <select id="opt-video-codec">
+                    <option value="">自动</option>
+                    <option value="h264">h264</option>
+                    <option value="h265">h265</option>
+                    <option value="av1">av1</option>
+                </select>
+            </label>
+            <label><span>video-encoder</span><input type="text" id="opt-video-encoder" placeholder="留空自动"></label>
+            <label><span>audio-encoder</span><input type="text" id="opt-audio-encoder" placeholder="留空自动"></label>
+            <label><span>audio-bit-rate</span><input type="number" id="opt-audio-bit-rate" min="0" step="1000"></label>
+            <label><span>screen-off-timeout (ms)</span><input type="number" id="opt-screen-off-timeout" min="0" step="1000"></label>
+        </div>
+        <details class="opt-extra">
+            <summary id="label-opt-extra">其他参数 (键值对)</summary>
+            <div id="opt-extra-list" class="opt-extra-list"></div>
+            <button id="opt-extra-add" type="button" class="mini">+</button>
+        </details>
+        <div class="opt-actions">
+            <button id="opt-reset" type="button" class="mini">重置</button>
+            <button id="opt-apply" type="button" class="mini">应用</button>
+        </div>
+    </details>
 </section>
 <script type="module" src="./app.js"></script>
 </body>
