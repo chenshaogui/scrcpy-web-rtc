@@ -14,6 +14,220 @@ That prints a link (and a QR code) you can open anywhere. No tunnel, no
 account, nothing hosted: the page finds your machine through encrypted
 messages on public brokers, and video and touch travel peer-to-peer.
 
+## 🚀 Docker 部署（Windows → ARM 服务器 / 任意 Linux）
+
+容器化的部署方式——把整个运行环境（Node + scrcpy-server + WebRTC）打包成镜像。
+**支持 amd64 和 arm64**，适合在树莓派、Radxa、OrangePi 等 ARM 服务器上跑 7×24。
+
+### 前置条件
+
+| 角色 | 环境 | 软件 |
+|---|---|---|
+| **构建机**（开发/打包） | Windows / macOS / Linux | Docker Desktop 23+ 或 docker-ce 24+，自带 buildx |
+| **运行机**（部署） | Linux（x86_64 或 arm64） | docker-ce 23+（要支持加载多架构 tar） |
+| **Android 设备** | Android 5+ | 开启 USB 调试或无线 adb |
+
+### 1. 直接跑（最快路径）
+
+Linux 服务器上：
+
+```bash
+docker run -d --name scrcpy-webrtc \
+  --network host \
+  --restart unless-stopped \
+  scrcpy-webrtc:latest
+```
+
+或用 docker-compose（推荐，已包含 `host` 网络 + 健康检查）：
+
+```bash
+docker compose up -d
+docker compose logs -f
+```
+
+打开浏览器访问 `http://<server-ip>:8010/` 即可。
+
+### 2. 从源码构建
+
+#### A. Windows 上用脚本（推荐国内网络）
+
+仓库自带 `build.ps1`，一键完成多架构构建/推送/打包：
+
+```powershell
+cd D:\myProject\scrcpy-web-rtc
+
+# 本机单架构（开发调试）
+.\build.ps1
+
+# 推送到 Docker Hub（多架构，ARM/x86 服务器都能拉）
+.\build.ps1 -MultiArch -Push -Registry "your-dockerhub-username"
+
+# 打包成 tar（离线传输到没公网的 ARM 服务器）
+.\build.ps1 -MultiArch -Save
+```
+
+参数说明：
+
+| 参数 | 作用 |
+|---|---|
+| `-MultiArch` | 同时构建 `linux/amd64` + `linux/arm64`（必须搭配 `-Push` 或 `-Save`） |
+| `-Push` | 推送到镜像仓库 |
+| `-Save` | 导出为 tar 文件，可离线拷贝 |
+| `-Registry <ns>` | 镜像命名空间，如 `qychan`、`ccr.ccs.tencentyun.com/your-ns` |
+| `-Tag <tag>` | 镜像 tag，默认 `latest` |
+| `-BuildkitImage <img>` | 自定义 buildkit 镜像源，默认 `docker.io/moby/buildkit:buildx-stable-1` |
+
+脚本会自动：
+1. 检测 `docker` / `buildx` 版本
+2. 创建 `docker-container` driver 的 `scrcpy-builder`（首次 ~5s）
+3. 选定目标平台（Windows → amd64，Apple Silicon → arm64）
+5. 用 `swr.cn-north-4.myhuaweicloud.com/.../node:22.23.2-slim` 加速 npm/esbuild
+
+#### B. 手动命令（Linux/macOS 或了解底层用）
+
+```bash
+# 创建 buildx builder（一次性）
+docker buildx create --name scrcpy-builder --driver docker-container
+docker buildx use scrcpy-builder
+
+# 多架构构建并推送 Docker Hub
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg NODE_IMAGE=docker.io/node:22.23.2-slim \
+  -t <your-dockerhub-username>/scrcpy-webrtc:latest \
+  --push .
+
+# 多架构打包成 tar（离线传输）
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg NODE_IMAGE=docker.io/node:22.23.2-slim \
+  -t scrcpy-webrtc:latest \
+  --output type=oci,dest=scrcpy-webrtc-multi.tar .
+```
+
+> 国内网络加速：在 `Dockerfile` 里默认用了
+> `swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22.23.2-slim`
+> （华为云 SWR 镜像，Docker Hub 的 CDN 副本）。如镜像没拉下来，手动指定为 `docker.io/node:22.23.2-slim`。
+
+### 3. 部署到 ARM 服务器
+
+#### 方式 A：从 registry 拉取
+
+```bash
+# ARM 服务器（arm64）上：
+docker pull <your-dockerhub-username>/scrcpy-webrtc:latest
+# 自动选 arm64 变体
+docker compose up -d
+```
+
+#### 方式 B：离线 tar 传输
+
+Windows 上：
+
+```powershell
+.\build.ps1 -Save
+# 生成 scrcpy-webrtc-latest-linux-amd64.tar（仅 Windows 架构）
+# 或 .\build.ps1 -MultiArch -Save 生成多架构 tar
+```
+
+传输（任选）：
+
+```bash
+scp scrcpy-webrtc-multi.tar root@rock5t:~
+# 或用 U 盘、网盘、局域网 HTTP server
+```
+
+ARM 服务器上加载：
+
+```bash
+docker load -i ~/scrcpy-webrtc-multi.tar
+docker compose up -d
+```
+
+### 4. 网络配置：host vs bridge
+
+`docker-compose.yml` 默认是 **`network_mode: host`**——容器和宿主机共享网络栈。
+
+```yaml
+services:
+  scrcpy-webrtc:
+    network_mode: host        # ← 关键
+    environment:
+      ADB_HOST: 127.0.0.1    # 宿主机 adb-server
+      ADB_PORT: 5037
+      # ADB_DEVICE_HOST 不用配
+```
+
+**优势**：容器 `127.0.0.1:5037` 就是宿主机的 adb-server，免去 `host.docker.internal` 的跨网络解析。
+
+如果需要隔离网络（不建议），可改成 bridge：
+
+```yaml
+services:
+  scrcpy-webrtc:
+    # 删掉 network_mode: host
+    ports:
+      - "8010:8010"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ADB_HOST: host.docker.internal  # 容器内访问宿主机 adb-server
+      ADB_PORT: 5037
+      # 若 adb 跑在远程/手机上：
+      # ADB_DEVICE_HOST: 192.168.1.20
+      # ADB_DEVICE_PORT: 5555
+```
+
+### 5. ADB 配置：`ADB_HOST` vs `ADB_DEVICE_HOST`
+
+两个变量指代**完全不同的对象**：
+
+```
+┌──────────────────┐    server.mjs (Node)      ┌──────────────┐        ┌──────────┐
+│ 宿主机/容器     │ ──── ADB_HOST ────────► │  adb-server   │ ◄── adbd │ Android │
+│ 上跑的 scrcpy- │    (默认 127.0.0.1)    │  (端口 5037)   │  (5555)  │ 设备    │
+│ webrtc 进程    │                            └──────────────┘        └──────────┘
+│                │ ── ADB_DEVICE_HOST ──► 直连设备（无线 adb IP）
+└──────────────────┘   (可选, 默认无)
+```
+
+| 变量 | 指向 | 默认 | 设置场景 |
+|---|---|---|---|
+| `ADB_HOST` | adb-server（daemon） | `127.0.0.1` | `network_mode: host` 时无需改；bridge 模式用 `host.docker.internal` |
+| `ADB_PORT` | adb-server 端口 | `5037` | 一般不动 |
+| `ADB_DEVICE_HOST` | 无线 adb 设备 IP | 无 | 想让容器内自动 `adb connect <ip>` 时设置 |
+| `ADB_DEVICE_PORT` | 无线 adb 端口 | `5555` | 一般不动 |
+
+`host` 模式下：`ADB_HOST: 127.0.0.1` 直接复用宿主机 adb-server，**删掉 `ADB_DEVICE_HOST`**。
+
+### 6. 故障排查
+
+| 症状 | 原因 | 解决 |
+|---|---|---|
+| `exec format error` 启动失败 | 宿主机是 arm64，但镜像拉到了 amd64 | `docker compose pull` 重新拉；`platform: linux/arm64` 显式指定 |
+| 构建报 `OCI exporter is not supported for the docker driver` | 默认 `docker` driver 不支持 OCI | 脚本已自动建 `docker-container` driver；手动：`docker buildx create --driver docker-container` |
+| 构建报 `personal access token is expired` | Docker Hub PAT 过期 | 脚本默认用 CN 镜像不依赖 Docker Hub；或 Docker Desktop 重新登录 |
+| 容器起来但看不到设备 | adb-server 没起 / 端口不对 | 宿主机执行 `adb devices`；`host` 模式确认 `network_mode: host` |
+| `npx @yume-chan/fetch-scrcpy-server` 卡住 | npm 拉 GitHub release 网络不稳 | Dockerfile 已用 `curl --retry 30` 直拉，无需处理 |
+
+### 7. 镜像验证
+
+```bash
+# 架构正确性
+docker inspect scrcpy-webrtc:latest --format '{{.Architecture}}'
+# arm64 服务器上预期：arm64
+
+# 多架构 manifest
+docker buildx imagetools inspect <user>/scrcpy-webrtc:latest
+# 预期两个 Platform：linux/amd64 + linux/arm64
+
+# 容器内确认
+docker compose exec scrcpy-webrtc uname -m
+# arm64 服务器上预期：aarch64
+```
+
+---
+
 ## What you get
 
 - **Any browser, any device** — no app to install; open the page on a phone,
