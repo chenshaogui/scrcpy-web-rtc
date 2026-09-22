@@ -720,12 +720,18 @@ async function acceptRtcOffer(sdp, extraIce) {
             e.receiver.playoutDelayHint = 0;
             e.receiver.jitterBufferTarget = 0;
         } catch {}
-        // fires once per track (video + audio) — share one element/stream
+        // Both audio and video tracks attach to the same <video> element.
+        // Rationale: Chrome's autoplay policy treats <video> and <audio>
+        // elements differently. A muted <video> element is always allowed
+        // to autoplay, but a muted <audio> element with a WebRTC MediaStream
+        // can still reject play() with NotAllowedError on some versions.
+        // Routing audio through <video> lets the autoplay exemption apply
+        // uniformly across browsers.
         if (!videoEl) {
             videoEl = document.createElement("video");
             videoEl.className = "screen-video";
             videoEl.autoplay = true;
-            videoEl.muted = muted;
+            videoEl.muted = muted;  // start in the user's remembered state
             videoEl.playsInline = true;
             videoEl.srcObject = new MediaStream();
             stageEl.appendChild(videoEl);
@@ -960,6 +966,11 @@ $("shell-close").onclick = closeShell;
 function setSettingsOpen(open) {
     settingsSheet.hidden = !open;
     settingsBackdrop.hidden = !open;
+    // sheet + backdrop already cover the entire viewport; disabling pointer
+    // events on the stage keeps any pointer that escapes the sheet (e.g. when
+    // a finger slides out of a button across a select dropdown) from being
+    // forwarded as a touch to the device
+    stageEl.style.pointerEvents = open ? "none" : "";
 }
 $("settings-close").onclick = () => setSettingsOpen(false);
 settingsBackdrop.onclick = () => setSettingsOpen(false);
@@ -1057,6 +1068,8 @@ $("btn-mute").onclick = () => {
     muted = !muted;
     rememberSession({ muted });
     $("btn-mute").textContent = muted ? "🔇" : "🔊";
+    // both audio and video tracks live on videoEl — toggle its muted
+    // property to switch audio playback
     if (videoEl) {
         videoEl.muted = muted;
         videoEl.play?.().catch(() => {});

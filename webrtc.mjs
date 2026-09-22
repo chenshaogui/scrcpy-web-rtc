@@ -121,6 +121,8 @@ export function createRtcSession({ sendSignal, onControl, onShell, log, iceServe
                 }),
             ],
             audio: [
+                // match scrcpy-server's stereo opus output so the decoder
+                // never has to remix channels
                 new RTCRtpCodecParameters({
                     mimeType: "audio/opus",
                     clockRate: 48000,
