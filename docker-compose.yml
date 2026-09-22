@@ -5,14 +5,13 @@ services:
       context: .
       dockerfile: 'Dockerfile'
     image: scrcpy-webrtc:latest
-    ports:
-      - "8010:8010"
+    network_mode: host
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       TZ: Asia/Shanghai
-      ADB_DEVICE_HOST: 100.66.1.4
+      ADB_DEVICE_HOST: 127.0.0.1
       # ADB_HOST / ADB_PORT point at the adb-server (default 127.0.0.1:5037).
       # For Docker on Linux/Mac, point ADB_HOST at host.docker.internal when
       # reusing the host's adb-server:
