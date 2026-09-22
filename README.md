@@ -241,6 +241,14 @@ docker compose exec scrcpy-webrtc uname -m
 - **Adjustable quality** with automatic downshift on weak networks
 - Works with several devices at once; pick from a list
 
+## Screenshots
+
+<p align="center">
+  <img src="./screenshots/main-screen.png" alt="Main screen" width="240"/>
+  <img src="./screenshots/control-panel.png" alt="Control panel" width="240"/>
+  <img src="./screenshots/custom-options.png" alt="Custom scrcpy options" width="240"/>
+</p>
+
 ## Requirements
 
 - Node.js 20+
