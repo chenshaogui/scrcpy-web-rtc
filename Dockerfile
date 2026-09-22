@@ -1,4 +1,8 @@
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22.23.2-slim
+# Base image. Default is Docker Hub (guaranteed multi-arch manifest).
+# Override via `--build-arg NODE_IMAGE=<your-mirror>/node:22.23.2-slim` if your
+# local mirror doesn't carry a multi-arch manifest for arm64 / amd64.
+ARG NODE_IMAGE=docker.io/node:22.23.2-slim
+FROM --platform=$TARGETPLATFORM ${NODE_IMAGE}
 
 LABEL maintainer="sgchen <1451023420@qq.com>"
 LABEL description="scrcpy - Web-based scrcpy client"
