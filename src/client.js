@@ -596,6 +596,12 @@ function disconnect() {
     canvas = null;
     currentSerial = null;
     path = "ws";
+    // drop the previous stream's geometry too, so the next connection starts
+    // from a clean slate instead of inheriting a stale orientation
+    streamW = 0;
+    streamH = 0;
+    viewRotation = 0;
+    paintRotateButton();
     stageEl.innerHTML = "";
     setBadge("");
 }
@@ -632,6 +638,10 @@ function connect(serial) {
         if (typeof ev.data === "string") {
             const msg = JSON.parse(ev.data);
             if (msg.type === "meta") {
+                // may legitimately be 0 until the first configuration packet
+                // is parsed — the follow-up "size" message carries it then
+                streamW = msg.width || 0;
+                streamH = msg.height || 0;
                 startDecoder(msg.codec);
                 $("btn-shell").hidden = !msg.shell;
                 if (msg.preset) qualitySelect.value = msg.auto ? "auto" : msg.preset;
@@ -669,6 +679,8 @@ function connect(serial) {
                 lastClipFromDevice = msg.text;
                 navigator.clipboard?.writeText(msg.text).catch(() => {});
             } else if (msg.type === "size") {
+                streamW = msg.width;
+                streamH = msg.height;
                 lastSize = `${msg.width}×${msg.height}`;
                 if (path !== "rtc") setBadge(`${lastSize} · WS`);
                 // stream rotated — re-run the follow rule
@@ -1024,12 +1036,24 @@ $("btn-fullscreen").onclick = () => {
 let viewRotation = 0;
 let rotationBias = { landscape: 90, portrait: 0, ...session.rotationBias };
 
+// Authoritative stream size, as reported by the server (parsed out of the
+// H.264/H.265 configuration). Element sizes are NOT trustworthy early on: a
+// freshly created <canvas> is 300×150 by default, which reads as "landscape"
+// and used to flip the view 90° depending on a timing race at page load.
+let streamW = 0;
+let streamH = 0;
+
 // natural size of whatever is currently displayed
 function contentSize() {
+    if (streamW && streamH) return { W: streamW, H: streamH };
     if (path === "rtc" && videoEl?.videoWidth) {
         return { W: videoEl.videoWidth, H: videoEl.videoHeight };
     }
-    if (canvas?.width) return { W: canvas.width, H: canvas.height };
+    // ignore a canvas that still carries the HTML default size / no size yet
+    if (canvas?.width > 0 && canvas?.height > 0 &&
+        !(canvas.width === 300 && canvas.height === 150)) {
+        return { W: canvas.width, H: canvas.height };
+    }
     return null;
 }
 
@@ -1105,6 +1129,11 @@ $("btn-rotate").onclick = () => {
 };
 window.addEventListener("resize", autoRotate);
 document.addEventListener("fullscreenchange", autoRotate);
+// the stage has no size until layout settles; re-evaluate whenever it changes
+// (this also catches phone rotation, where `resize` can fire late)
+if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => autoRotate()).observe(stageEl);
+}
 
 $("btn-shell").onclick = () => {
     setSettingsOpen(false);
