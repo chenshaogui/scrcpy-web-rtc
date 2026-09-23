@@ -578,6 +578,8 @@ function teardownRtc() {
         if (canvas) canvas.style.display = "";
         sendWs({ t: "video-path", mode: "ws" });
         setBadge(`${lastSize} · WS`);
+        // the rotated view lost its <video> — re-adopt the canvas
+        autoRotate();
     }
 }
 
@@ -669,6 +671,8 @@ function connect(serial) {
             } else if (msg.type === "size") {
                 lastSize = `${msg.width}×${msg.height}`;
                 if (path !== "rtc") setBadge(`${lastSize} · WS`);
+                // stream rotated — re-run the follow rule
+                autoRotate();
             } else if (msg.type === "error") {
                 setBadge(t.error(msg.message), "error");
             } else if (msg.t === "rtc-offer") {
@@ -721,6 +725,8 @@ function startDecoder(codec) {
     // showing, the fresh canvas must stay hidden underneath
     if (path === "rtc") canvas.style.display = "none";
     stageEl.appendChild(canvas);
+    // a rotated view must adopt the fresh canvas (the old one was removed)
+    autoRotate();
     attachInput(canvas);
 }
 
@@ -772,7 +778,11 @@ async function acceptRtcOffer(sdp, extraIce) {
             videoEl.srcObject = new MediaStream();
             stageEl.appendChild(videoEl);
             attachInput(videoEl);
+            autoRotate();
             watchRtcStats();
+            // fires as soon as the track's dimensions change (device rotated),
+            // earlier than the server-side sizeChanged round-trip
+            videoEl.addEventListener("resize", autoRotate);
         }
         videoEl.srcObject.addTrack(e.track);
         videoEl.play().catch((err) => console.warn("video.play() rejected:", err));
@@ -833,6 +843,16 @@ function watchRtcStats() {
 // normalized [0,1] coordinates; accounts for letterboxing in <video>
 function norm(el, e) {
     const rect = el.getBoundingClientRect();
+    if (viewRotation) {
+        // inside the rotator the element fills its box exactly (no
+        // letterbox) — but the box is rotated, so un-rotate the point
+        const u = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+        const v = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+        // rotate(90) cw: video x = visual y, video y = 1 - visual x
+        if (viewRotation === 90) return { x: v, y: 1 - u };
+        if (viewRotation === 180) return { x: 1 - u, y: 1 - v };
+        return { x: 1 - v, y: u }; // 270
+    }
     let { width, height } = rect;
     let ox = 0;
     let oy = 0;
@@ -991,6 +1011,100 @@ $("btn-fullscreen").onclick = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen?.();
 };
+
+// ── view rotation: follow the device + manual correction ───────
+// The stream adapts to device rotation on its own, but when the device goes
+// landscape while the browser window is portrait, the content shrinks into a
+// small bar. So rotation follows the *content*: when content and stage are
+// "crossed", the view rotates by `bias` so the user can just turn their phone
+// sideways (and once the browser window itself rotates, the view settles back
+// to 0). The bias is remembered per content orientation: frame sizes can't
+// tell 90° from 270° (reverse-landscape), so a wrong guess is corrected by
+// tapping 🔄 once — and sticks for the next rotation.
+let viewRotation = 0;
+let rotationBias = { landscape: 90, portrait: 0, ...session.rotationBias };
+
+// natural size of whatever is currently displayed
+function contentSize() {
+    if (path === "rtc" && videoEl?.videoWidth) {
+        return { W: videoEl.videoWidth, H: videoEl.videoHeight };
+    }
+    if (canvas?.width) return { W: canvas.width, H: canvas.height };
+    return null;
+}
+
+function applyViewRotation() {
+    document.getElementById("rotator")?.remove();
+    const els = [canvas, videoEl].filter(Boolean);
+    if (!viewRotation || !els.length) {
+        // native layout: canvas in flow, <video> absolutely covering the stage
+        for (const el of els) {
+            el.style.cssText = "";
+            if (el === canvas) {
+                if (path === "rtc") el.style.display = "none";
+            }
+            stageEl.appendChild(el);
+        }
+        return;
+    }
+    const size = contentSize();
+    if (!size) { viewRotation = 0; return; }
+    const { W, H } = size;
+    const sw = stageEl.clientWidth;
+    const sh = stageEl.clientHeight;
+    // the rotator keeps the content's aspect ratio (no letterboxing inside),
+    // and is scaled so that the *rotated* visual box fits the stage
+    const k = viewRotation % 180 === 90
+        ? Math.min(sw / H, sh / W)
+        : Math.min(sw / W, sh / H);
+    const rot = document.createElement("div");
+    rot.id = "rotator";
+    rot.style.cssText =
+        `position:absolute;left:50%;top:50%;` +
+        `width:${Math.round(W * k)}px;height:${Math.round(H * k)}px;` +
+        `transform:translate(-50%,-50%) rotate(${viewRotation}deg);`;
+    for (const el of els) {
+        el.style.cssText =
+            "position:absolute;inset:0;width:100%;height:100%;object-fit:contain;";
+        if (el === canvas && path === "rtc") el.style.display = "none";
+        rot.appendChild(el);
+    }
+    stageEl.appendChild(rot);
+}
+
+function paintRotateButton() {
+    $("btn-rotate").textContent = viewRotation ? String(viewRotation) + "°" : "🔄";
+}
+// re-evaluate the follow rule; only acts when the answer actually changes
+function autoRotate() {
+    const size = contentSize();
+    if (!size) return;
+    const contentLandscape = size.W >= size.H;
+    const stageLandscape = stageEl.clientWidth >= stageEl.clientHeight;
+    const want = contentLandscape
+        ? (stageLandscape ? 0 : rotationBias.landscape)
+        : rotationBias.portrait;
+    if (want !== viewRotation) {
+        viewRotation = want;
+        applyViewRotation();
+        paintRotateButton();
+    }
+}
+
+$("btn-rotate").onclick = () => {
+    viewRotation = (viewRotation + 90) % 360;
+    // remember the correction for this content orientation, so the next
+    // device rotation auto-applies it (90 vs 270 can't be auto-detected)
+    const size = contentSize();
+    if (size) {
+        rotationBias[size.W >= size.H ? "landscape" : "portrait"] = viewRotation;
+        rememberSession({ rotationBias });
+    }
+    applyViewRotation();
+    paintRotateButton();
+};
+window.addEventListener("resize", autoRotate);
+document.addEventListener("fullscreenchange", autoRotate);
 
 $("btn-shell").onclick = () => {
     setSettingsOpen(false);
