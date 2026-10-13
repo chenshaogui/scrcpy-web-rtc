@@ -63,6 +63,12 @@ const STRINGS = {
         backendDownHint: (b) => `连不上 ${b} — 检查服务是否在线，或用 ?server= 换个地址`,
         noDevices: "无设备 — 请先 adb connect",
         noDevicesHint: "后端正常，但没有已连接的设备",
+        adbConnect: "ADB 连接",
+        adbHostPlaceholder: "设备 IP",
+        adbPortPlaceholder: "端口",
+        adbConnectBtn: "连接",
+        adbConnected: "已连接，刷新设备中…",
+        adbConnectFailed: (m) => `adb connect 失败：${m}`,
         selectDevice: "选择设备…",
         device: "设备",
         connecting: "连接中…",
@@ -121,6 +127,12 @@ const STRINGS = {
         backendDownHint: (b) => `Cannot reach ${b} — check the service, or use ?server= to change it`,
         noDevices: "No devices — run adb connect first",
         noDevicesHint: "Backend is up, but no devices are connected",
+        adbConnect: "ADB connect",
+        adbHostPlaceholder: "Device IP",
+        adbPortPlaceholder: "Port",
+        adbConnectBtn: "Connect",
+        adbConnected: "Connected, refreshing devices…",
+        adbConnectFailed: (m) => `adb connect failed: ${m}`,
         selectDevice: "Select device…",
         device: "Device",
         connecting: "Connecting…",
@@ -237,6 +249,9 @@ const badgeEl = $("status-badge");
 const kbdBar = $("kbdbar");
 const kbdInput = $("kbd-input");
 const shellPanel = $("shell-panel");
+const adbHostInput = $("adb-host");
+const adbPortInput = $("adb-port");
+const adbConnectBtn = $("adb-connect");
 
 const PRESET_NAMES = { low: t.qLow, medium: t.qMedium, high: t.qHigh };
 
@@ -254,7 +269,8 @@ for (const [id, key] of [
 // the settings sheet labels its rows in text rather than tooltips
 for (const [id, key] of [
     ["settings-title", "settings"], ["label-device", "device"],
-    ["label-refresh", "refresh"], ["label-quality", "quality"],
+    ["label-refresh", "refresh"], ["label-adb-connect", "adbConnect"],
+    ["label-quality", "quality"],
     ["label-encoder", "encoder"], ["label-audio-encoder", "audioEncoder"],
     ["label-sound", "sound"], ["label-fullscreen", "fullscreen"],
     ["label-power", "power"], ["label-back", "back"], ["label-home", "home"],
@@ -364,6 +380,18 @@ if (Array.from(qualitySelect.options).some((o) => o.value === session.quality)) 
 kbdInput.placeholder = t.kbdPlaceholder;
 $("kbd-send").textContent = t.send;
 stageEl.dataset.emptyHint = t.emptyStage;
+adbHostInput.placeholder = t.adbHostPlaceholder;
+adbPortInput.placeholder = t.adbPortPlaceholder;
+adbConnectBtn.textContent = t.adbConnectBtn;
+if (session.adbHost) adbHostInput.value = session.adbHost;
+if (session.adbPort) adbPortInput.value = String(session.adbPort);
+if (SIGNAL) {
+    // serverless signaling 没有本地后端，adb connect 功能不可用
+    adbHostInput.disabled = true;
+    adbPortInput.disabled = true;
+    adbConnectBtn.disabled = true;
+    adbConnectBtn.title = "Serverless signaling 模式下不可用";
+}
 
 let ws = null;
 let decoder = null;
@@ -460,9 +488,11 @@ async function loadDevices() {
         deviceSelect.value = currentSerial;
         return;
     }
-    // the device mirrored last time wins, so a reload picks up where it left
-    // off; failing that, a single device needs no tap at all
-    const again = devices.find((d) => d.serial === session.serial) ?? (devices.length === 1 ? devices[0] : null);
+    // prefer: last mirrored device > the device we just adb-connected > sole device
+    const adbTarget = session.adbHost ? `${session.adbHost}:${session.adbPort || 5555}` : "";
+    const again = devices.find((d) => d.serial === session.serial)
+        ?? devices.find((d) => d.serial === adbTarget)
+        ?? (devices.length === 1 ? devices[0] : null);
     if (again) {
         deviceSelect.value = again.serial;
         connect(again.serial);
@@ -1418,6 +1448,36 @@ $("btn-mute").addEventListener("pointerup", () => {
 });
 $("btn-mute").addEventListener("pointerleave", cancelSoundPress);
 $("btn-mute").addEventListener("pointercancel", cancelSoundPress);
+
+async function adbConnect() {
+    const ip = adbHostInput.value.trim();
+    const port = Number(adbPortInput.value);
+    if (!ip || !Number.isFinite(port) || port < 1 || port > 65535) {
+        setBadge(t.adbConnectFailed("invalid ip or port"), "error");
+        return;
+    }
+    try {
+        const res = await fetch(`${HTTP_BASE}/api/adb-connect?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(port)}`, {
+            headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {},
+        });
+        if (res.status === 401) {
+            setBadge(t.unauthorizedHint, "error");
+            return;
+        }
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        rememberSession({ adbHost: ip, adbPort: port });
+        setBadge(t.adbConnected, "p2p");
+        await loadDevices();
+    } catch (e) {
+        setBadge(t.adbConnectFailed(e.message), "error");
+    }
+}
+adbConnectBtn.onclick = adbConnect;
+adbHostInput.onkeydown = (e) => { if (e.key === "Enter") adbConnect(); };
+adbPortInput.onkeydown = (e) => { if (e.key === "Enter") adbConnect(); };
 
 // clipboard sync: browser -> device on tab focus (permission permitting)
 window.addEventListener("focus", async () => {

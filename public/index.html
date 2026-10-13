@@ -474,6 +474,12 @@
         <button id="refresh" class="mini" title="刷新设备列表">⟳</button>
     </div>
     <div class="row">
+        <label id="label-adb-connect" for="adb-host">ADB 连接</label>
+        <input type="text" id="adb-host" class="mini" placeholder="IP" style="flex:1;min-width:80px;">
+        <input type="number" id="adb-port" class="mini" placeholder="端口" value="5555" style="width:64px;min-width:64px;">
+        <button id="adb-connect" class="mini">连接</button>
+    </div>
+    <div class="row">
         <label id="label-quality" for="quality-select">画质</label>
         <select id="quality-select" title="画质">
             <option value="auto">自动</option>
