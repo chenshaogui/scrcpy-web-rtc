@@ -207,6 +207,36 @@ const WS_BASE = BACKEND
     ? `wss://${BACKEND}`
     : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${PREFIX}`;
 
+// Hijack-prone in-app WebViews (iOS WKWebView without allowsInlineMediaPlayback,
+// WeChat XWeb, fnOS 飞牛云 App) promote a <video> playing a WebRTC MediaStream to
+// a native fullscreen player that renders it black. So keep video on the
+// WebSocket <canvas> and use WebRTC only for audio + control. This doubles as the
+// fix for iOS 16.4–18.x, whose WebKit has no WebCodecs AudioDecoder — the RTP
+// track is decoded natively and played through WebAudio instead.
+const HIJACK_WEBVIEW = (() => {
+    const ua = navigator.userAgent || "";
+    const bareIOSWebview = /iPhone|iPad|iPod/.test(ua)
+        && !/Safari|CriOS|FxiOS|EdgiOS|OPiOS|MxIOS/i.test(ua);
+    const bareAndroidWebview = /Android/.test(ua)
+        && !/Chrome|CriOS|Firefox|Edg|OPR|SamsungBrowser|HuaweiBrowser|MiuiBrowser/i.test(ua);
+    const knownHijacker = /fnOS|fnClient|feiniu|fnnas|MicroMessenger|aweme|Bytedance|QQ\/|Quark/i.test(ua);
+    return bareIOSWebview || bareAndroidWebview || knownHijacker;
+})();
+// Hybrid takes video off WebRTC and renders it on the WS <canvas>, which needs
+// WebCodecs VideoDecoder. Some embedded WebViews (fnOS desktop/mobile client on
+// Windows) advertise a hijacker UA yet ship without WebCodecs, and a desktop
+// WebView never promotes <video> to a native player anyway — so only enter
+// HYBRID when VideoDecoder is actually available, otherwise fall back to the
+// WebRTC <video> path (native decode, no WebCodecs required).
+const HAS_WEBCODECS = typeof VideoDecoder !== "undefined";
+const HYBRID_PARAM = new URLSearchParams(location.search).get("hybrid");
+const HYBRID = (HYBRID_PARAM !== null ? HYBRID_PARAM !== "0" : HIJACK_WEBVIEW) && HAS_WEBCODECS;
+// iOS WebKit won't render a remote WebRTC audio track through WebAudio
+// (MediaStreamAudioSourceNode → destination stays silent); it plays the same
+// stream from a hidden <audio> element, which — unlike a <video> that outputs
+// sound — is never promoted to the native fullscreen player.
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+
 function promptBackend() {
     const input = prompt(t.backendPrompt, BACKEND);
     if (input === null) return;
@@ -511,6 +541,7 @@ function teardownWsAudio() {
 // therefore pumped through an AudioContext graph that feeds the same audioGain
 // node the WS path uses, so the 🔊 toggle controls both paths identically.
 let rtcAudio = null; // { src, stream }
+let rtcAudioEl = null; // hidden <audio> used to play the RTP track on iOS
 
 function ensureAudioGraph() {
     audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
@@ -525,9 +556,24 @@ function ensureAudioGraph() {
 function setupRtcAudio(track) {
     if (track.kind !== "audio") return;
     teardownRtcAudio();
+    const stream = new MediaStream([track]);
+    if (IS_IOS) {
+        // iOS WebKit does not render a remote WebRTC audio track through a
+        // WebAudio MediaStreamSource — the destination stays silent — but it
+        // plays the very same stream from a hidden <audio> element, which is
+        // never hijacked into the fullscreen player the way a sounding <video>
+        // would be. Start muted (autoplay-safe); the 🔊 tap unmutes + resumes.
+        rtcAudioEl = document.createElement("audio");
+        rtcAudioEl.srcObject = stream;
+        rtcAudioEl.autoplay = true;
+        rtcAudioEl.muted = true;
+        rtcAudioEl.volume = 1;
+        document.body.appendChild(rtcAudioEl);
+        rtcAudioEl.play().catch(() => {});
+        return;
+    }
     try {
         ensureAudioGraph();
-        const stream = new MediaStream([track]);
         const src = audioCtx.createMediaStreamSource(stream);
         src.connect(audioGain);
         rtcAudio = { src, stream };
@@ -539,6 +585,10 @@ function setupRtcAudio(track) {
 function teardownRtcAudio() {
     try { rtcAudio?.src.disconnect(); } catch {}
     rtcAudio = null;
+    if (rtcAudioEl) {
+        try { rtcAudioEl.pause(); rtcAudioEl.srcObject = null; rtcAudioEl.remove(); } catch {}
+        rtcAudioEl = null;
+    }
 }
 
 function setBadge(text, cls = "") {
@@ -896,6 +946,12 @@ function connect(serial) {
 }
 
 function startDecoder(codec) {
+    // No WebCodecs (e.g. fnOS's bundled WebView): skip the WS canvas entirely so
+    // the meta handler doesn't throw and WebRTC's <video> can carry the picture.
+    if (!HAS_WEBCODECS) {
+        console.warn("WS video unavailable: WebCodecs VideoDecoder is not defined; relying on WebRTC");
+        return;
+    }
     let renderer;
     try {
         renderer = new WebGLVideoFrameRenderer();
@@ -924,6 +980,10 @@ function tryWebRtc() {
         if (SIGNAL) setBadge(t.p2pFailed, "error");
         return;
     }
+    // Hybrid mode takes audio off the WebSocket (iOS < 26 has no WebCodecs
+    // AudioDecoder) and plays it from the RTP track; stop the tag-2 handler
+    // from chasing an unavailable decoder and flashing "不支持解码音频".
+    if (HYBRID) wsAudioEnabled = false;
     sendWs({ t: "rtc-start" });
 }
 
@@ -951,6 +1011,13 @@ async function acceptRtcOffer(sdp, extraIce) {
             e.receiver.playoutDelayHint = 0;
             e.receiver.jitterBufferTarget = 0;
         } catch {}
+        // Hybrid mode: never build a <video> (the WebView would promote it to a
+        // native player and show black). Video comes from the WS canvas; the only
+        // track consumed from WebRTC here is audio, via WebAudio.
+        if (HYBRID) {
+            if (e.track.kind === "audio") setupRtcAudio(e.track);
+            return;
+        }
         // Both audio and video tracks attach to the same <video> element.
         // Rationale: Chrome's autoplay policy treats <video> and <audio>
         // elements differently. A muted <video> element is always allowed
@@ -990,6 +1057,12 @@ async function acceptRtcOffer(sdp, extraIce) {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     sendWs({ t: "rtc-answer", sdp: answer.sdp });
+    if (HYBRID) {
+        // we render the WS canvas, so tell the host to stop pushing video over
+        // WebRTC — only audio (and the control DataChannel) ride P2P here
+        sendWs({ t: "rtc-video", enabled: false });
+        setBadge(`${lastSize} · WS画面 + P2P音频`);
+    }
 }
 
 // switch paths based on real decode progress from getStats(); keeps a live
@@ -1627,6 +1700,12 @@ $("btn-mute").addEventListener("pointerup", () => {
     // not persisted: every new tab/session begins silent so the browser's
     // autoplay policy is satisfied without a NotAllowedError on first play
     paintSoundButton();
+    // iOS plays the remote track through a hidden <audio>: this tap is the
+    // gesture that lets it un-mute and start emitting sound.
+    if (rtcAudioEl) {
+        rtcAudioEl.muted = muted;
+        rtcAudioEl.play?.().catch(() => {});
+    }
     // both audio paths (WS decode + RTP track) flow through audioGain, so
     // toggling its gain mutes/unmutes either one. videoEl itself must stay
     // muted — an unmuted <video> makes iOS pop up its native player.

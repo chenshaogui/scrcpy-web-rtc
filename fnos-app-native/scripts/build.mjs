@@ -18,7 +18,7 @@
 
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -169,4 +169,24 @@ if (!existsSync(pkgApp)) {
 for (const [src, name] of [[out, "server.cjs"], [proxyOut, "proxy.cjs"]]) {
     copyFileSync(src, join(pkgApp, name));
     console.log(`[OK] ${join(pkgApp, name)} (synced from build/)`);
+}
+
+// ── ensure server.bin ships in package/app/ ───────────────────────
+// server.cjs calls loadServerBin() at module top level, which reads the
+// sibling server.bin and process.exit(1)s if it's missing. Without this
+// file the app dies instantly on start and fnOS reports "gateway socket
+// not created within 15s". Sync it from the fetched npm package (run
+// `npm run fetch-server` at the workspace root to download it first).
+import { statSync } from "node:fs";
+const pkgServerBin = join(pkgApp, "server.bin");
+const fetchedServerBin = resolve(root, "..", "node_modules", "@yume-chan", "fetch-scrcpy-server", "server.bin");
+if (existsSync(fetchedServerBin)) {
+    copyFileSync(fetchedServerBin, pkgServerBin);
+    console.log(`[OK] ${pkgServerBin} (synced from fetch-scrcpy-server, ${statSync(pkgServerBin).size} B)`);
+} else if (existsSync(pkgServerBin)) {
+    console.log(`[OK] ${pkgServerBin} (kept existing, ${statSync(pkgServerBin).size} B)`);
+} else {
+    console.error(`[FAIL] server.bin missing. Neither ${fetchedServerBin} nor ${pkgServerBin} exists.`);
+    console.error(`       Run \`npm run fetch-server\` at the workspace root, then rebuild.`);
+    process.exit(1);
 }

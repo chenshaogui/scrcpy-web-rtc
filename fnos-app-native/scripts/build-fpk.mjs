@@ -39,10 +39,14 @@ const TARGETS = [
 ];
 
 // ── fnpack discovery / download ────────────────────────────────────
+// Official fnpack binaries are published without an .exe extension and use
+// `amd64` (not `x64`) for the 64-bit Intel/AMD arch, e.g.
+//   https://static2.fnnas.com/fnpack/fnpack-1.2.3-windows-amd64
+// We download to a local path ending in .fnpack.exe so spawnSync can exec it.
 function fnpackTarget() {
     if (process.platform !== "win32") return null;
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    return `windows-${arch}.exe`;
+    const arch = process.arch === "arm64" ? "arm64" : "amd64";
+    return `windows-${arch}`;
 }
 
 async function findFnpack() {

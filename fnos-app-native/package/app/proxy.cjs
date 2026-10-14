@@ -16,7 +16,7 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// fnos-app-native/proxy.mjs
+// proxy.mjs
 var proxy_exports = {};
 __export(proxy_exports, {
   startProxy: () => startProxy

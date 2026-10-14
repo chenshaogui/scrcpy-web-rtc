@@ -582,6 +582,9 @@ async function handleSession(ws, req) {
     let controller = null;
     let video = null;
     let videoPath = "ws";
+    // hybrid clients render the WS canvas and take audio from the RTP track, so
+    // they ask the host to stop writing video into the WebRTC session
+    let rtcVideo = true;
     let lastConfig = null;
     let preset = "medium";
     let autoQuality = true;
@@ -921,6 +924,9 @@ async function handleSession(ws, req) {
             videoPath = msg.mode === "rtc" ? "rtc" : "ws";
             log(`video path: ${videoPath}`);
             if (videoPath === "rtc") requestKeyframe();
+        } else if (msg.t === "rtc-video") {
+            rtcVideo = msg.enabled !== false;
+            log(`webrtc video ${rtcVideo ? "on" : "off (hybrid audio-only P2P)"}`);
         } else {
             handleControl(msg);
         }
@@ -1034,12 +1040,9 @@ async function handleSession(ws, req) {
             });
             video.sizeChanged((size) => sendSignal({ type: "size", ...size }));
 
-            // audio pump: follow the viewer's actual video path. Only when
-            // the page confirmed it is playing the P2P stream (video-path
-            // "rtc") does audio ride the RTP track — a mobile WebView can
-            // hold the <video> paused, and then RTP audio would go nowhere.
-            // Otherwise opus frames are tagged (0x02) onto the control
-            // WebSocket for the WS fallback pipeline.
+            // audio pump: once WebRTC is connected, opus rides the RTP track
+            // (iOS decodes it natively). Only before P2P comes up do we tag
+            // (0x02) opus frames onto the control WebSocket for the WS decoder.
             (async () => {
                 const meta = await current.audioStream;
                 if (meta?.type !== "success") {
@@ -1050,7 +1053,7 @@ async function handleSession(ws, req) {
                 while (true) {
                     const { done, value: packet } = await audioReader.read();
                     if (done) break;
-                    if (videoPath === "rtc" && rtc?.connected) {
+                    if (rtc?.connected) {
                         try {
                             rtc.sendAudioPacket(packet);
                         } catch {}
@@ -1087,7 +1090,7 @@ async function handleSession(ws, req) {
                 const { done, value: packet } = await reader.read();
                 if (done || ws.readyState !== ws.OPEN) break;
                 if (packet.type === "configuration") lastConfig = packet;
-                if (rtc) {
+                if (rtc && rtcVideo) {
                     try {
                         if (packet.type === "configuration" || rtc.connected) {
                             rtc.sendVideoPacket(packet);

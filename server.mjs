@@ -581,6 +581,9 @@ async function handleSession(ws, req) {
     let controller = null;
     let video = null;
     let videoPath = "ws";
+    // hybrid clients render the WS canvas and take audio from the RTP track, so
+    // they ask the host to stop writing video into the WebRTC session
+    let rtcVideo = true;
     let lastConfig = null;
     let preset = "medium";
     let autoQuality = true;
@@ -920,6 +923,9 @@ async function handleSession(ws, req) {
             videoPath = msg.mode === "rtc" ? "rtc" : "ws";
             log(`video path: ${videoPath}`);
             if (videoPath === "rtc") requestKeyframe();
+        } else if (msg.t === "rtc-video") {
+            rtcVideo = msg.enabled !== false;
+            log(`webrtc video ${rtcVideo ? "on" : "off (hybrid audio-only P2P)"}`);
         } else {
             handleControl(msg);
         }
@@ -1071,7 +1077,7 @@ async function handleSession(ws, req) {
                 const { done, value: packet } = await reader.read();
                 if (done || ws.readyState !== ws.OPEN) break;
                 if (packet.type === "configuration") lastConfig = packet;
-                if (rtc) {
+                if (rtc && rtcVideo) {
                     try {
                         if (packet.type === "configuration" || rtc.connected) {
                             rtc.sendVideoPacket(packet);
