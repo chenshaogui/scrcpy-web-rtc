@@ -1,0 +1,5 @@
+#!/bin/bash
+# Config-change pre-hook (native): no validation needed; cmd/main stop/start
+# in the callback will pick up new env / settings. Required: must exit 0.
+set -u
+exit 0

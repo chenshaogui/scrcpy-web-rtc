@@ -1,0 +1,5 @@
+#!/bin/bash
+# Install pre-hook (native): nothing to pre-stage — the app dir is already
+# laid out by fnOS at this point. Required: must exit 0.
+set -u
+exit 0

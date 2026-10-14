@@ -1,0 +1,5 @@
+#!/bin/bash
+# Install post-hook (native): fnOS takes care of starting the app via
+# cmd/main start. Nothing extra to do here. Required: must exit 0.
+set -u
+exit 0

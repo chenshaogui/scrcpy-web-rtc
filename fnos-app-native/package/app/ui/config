@@ -1,0 +1,14 @@
+{
+  ".url": {
+    "scrcpy-webrtc.main": {
+      "title": "云手机助手",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/scrcpy-webrtc",
+      "gatewaySocket": "app.sock",
+      "url": "/app/scrcpy-webrtc",
+      "allUsers": true
+    }
+  }
+}

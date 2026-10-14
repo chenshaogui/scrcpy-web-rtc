@@ -1,0 +1,13 @@
+#!/bin/bash
+# Upgrade pre-hook (native): stop the running app so the new files can be
+# replaced. fnOS will call cmd/main start again afterwards.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# cmd/ sits next to target/ etc. at the install root.
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ -x "${APP_DIR}/cmd/main" ]; then
+    "${APP_DIR}/cmd/main" stop || true
+fi
+exit 0

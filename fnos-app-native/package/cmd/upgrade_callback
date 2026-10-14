@@ -1,0 +1,5 @@
+#!/bin/bash
+# Upgrade post-hook (native): fnOS will re-start the app via cmd/main start.
+# Nothing to do here. Required: must exit 0.
+set -u
+exit 0

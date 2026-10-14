@@ -15,8 +15,8 @@
     "scrcpy-server.LICENSE"
   ],
   "scripts": {
-    "prebuild": "rm -f public/*.js",
-    "build": "esbuild src/client.js --bundle --format=esm --splitting --outdir=public --entry-names=app --minify --loader:.css=text",
+    "prebuild": "node -e \"const fs=require('fs'); fs.readdirSync('public').filter(f=>f.endsWith('.js')).forEach(f=>fs.rmSync('public/'+f))\"",
+    "build": "esbuild src/client.js --bundle --format=esm --outfile=public/app.js --minify --loader:.css=text",
     "fetch-server": "fetch-scrcpy-server 3.1",
     "prepack": "npm run build && cp node_modules/@yume-chan/fetch-scrcpy-server/server.bin server.bin && cp node_modules/@yume-chan/fetch-scrcpy-server/scrcpy.LICENSE scrcpy-server.LICENSE",
     "start": "node server.mjs"

@@ -1,0 +1,5 @@
+#!/bin/bash
+# Uninstall post-hook (native): nothing extra to clean up. The app dir and
+# data dir are removed by fnOS. Required: must exit 0.
+set -u
+exit 0

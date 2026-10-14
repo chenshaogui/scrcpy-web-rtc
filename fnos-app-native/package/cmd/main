@@ -1,0 +1,154 @@
+#!/bin/bash
+#
+# scrcpy-webrtc (native) lifecycle entry — fnOS compliant.
+#
+# start   -> 0 ok
+# stop    -> 0 ok
+# status  -> 0 running / 3 not running
+# other   -> 1, with a user-visible error in $TRIM_TEMP_LOGFILE
+#
+# Idempotent: install / upgrade / config flows may call start or stop
+# repeatedly. We track PIDs in $VAR_DIR so repeated start is a no-op.
+#
+# Runtime: relies on the fnOS-official nodejs_v22 app (declared via
+# `install_dep_apps=nodejs_v22` in manifest). The runtime lives at
+# /var/apps/nodejs_v22/target — same layout the Notepad example uses.
+# adb keys persist in $HOME (overridden to $VAR_DIR) so trust survives
+# uninstall + reinstall.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+APP_DIR="${TRIM_APPDEST:-/vol1/@appcenter/scrcpy-webrtc}"
+VAR_DIR="${TRIM_PKGVAR:-$APP_DIR/var}"
+LOG_FILE="${VAR_DIR}/app.log"
+SERVER_PID_FILE="${VAR_DIR}/server.pid"
+PROXY_PID_FILE="${VAR_DIR}/proxy.pid"
+GATEWAY_SOCKET_FILE="${APP_DIR}/app.sock"
+GATEWAY_PREFIX="/app/scrcpy-webrtc"
+# 18010 — picked high to avoid collisions with other apps (e.g. scrcpyNas
+# often grabs 8000/8010). The fnOS unified gateway only cares about the
+# unix socket below; this port is just for the inner HTTP server.
+INNER_PORT=18010
+
+mkdir -p "$VAR_DIR" 2>/dev/null || true
+
+log() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE" 2>/dev/null
+}
+
+fail() {
+    log "ERROR: $*"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        printf '%s\n' "$*" >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+    fi
+    exit 1
+}
+
+# Use the system nodejs_v22 (per `install_dep_apps` in manifest).
+NODE_BIN="/var/apps/nodejs_v22/target/bin/node"
+[ -x "$NODE_BIN" ] || fail "nodejs_v22 not installed at $NODE_BIN — install it from fnOS app center first"
+
+# fnOS's exact install layout has shifted between versions: the fpk's
+# app/* payload may land at $TRIM_APPDEST, $TRIM_APPDEST/app or
+# $TRIM_APPDEST/target. Detect whichever actually holds server.cjs.
+APP_ROOT=""
+for cand in "$APP_DIR" "$APP_DIR/app" "$APP_DIR/target"; do
+    if [ -f "${cand}/server.cjs" ]; then
+        APP_ROOT="$cand"
+        break
+    fi
+done
+[ -n "$APP_ROOT" ] || fail "server.cjs not found under $APP_DIR (looked in ., ./app, ./target)"
+
+# adb keys persist in the data dir so reconnects after reinstall keep trust.
+export HOME="${VAR_DIR}"
+
+is_running() {
+    # Spec: app is running iff the gateway socket exists and both worker
+    # processes are alive. The socket alone is not enough — the proxy can
+    # keep accepting requests after the inner server has died.
+    [ -S "$GATEWAY_SOCKET_FILE" ] \
+        && [ -f "$PROXY_PID_FILE" ] \
+        && kill -0 "$(cat "$PROXY_PID_FILE" 2>/dev/null)" 2>/dev/null \
+        && [ -f "$SERVER_PID_FILE" ] \
+        && kill -0 "$(cat "$SERVER_PID_FILE" 2>/dev/null)" 2>/dev/null
+}
+
+start() {
+    if is_running; then
+        log "already running"
+        exit 0
+    fi
+
+    rm -f "$GATEWAY_SOCKET_FILE" 2>/dev/null || true
+    cd "$APP_ROOT" || fail "cannot cd to $APP_ROOT"
+
+    log "starting server (port ${INNER_PORT})"
+    nohup "$NODE_BIN" server.cjs \
+        --port "$INNER_PORT" \
+        --no-page --no-signal --no-qr \
+        >"${VAR_DIR}/server.log" 2>&1 &
+    echo $! > "$SERVER_PID_FILE"
+
+    log "starting gateway proxy (prefix=${GATEWAY_PREFIX}, root=${APP_ROOT})"
+    GATEWAY_SOCKET="$GATEWAY_SOCKET_FILE" \
+    GATEWAY_PREFIX="$GATEWAY_PREFIX" \
+    INNER_PORT="$INNER_PORT" \
+    WEB_DIR="${APP_ROOT}/web" \
+    LOG_FILE="${VAR_DIR}/proxy.log" \
+    nohup "$NODE_BIN" proxy.cjs \
+        >"${VAR_DIR}/proxy.out" 2>&1 &
+    echo $! > "$PROXY_PID_FILE"
+
+    # Wait for the socket — up to 15s.
+    local i=0
+    while [ "$i" -lt 15 ]; do
+        if is_running; then
+            log "started (gateway socket up)"
+            exit 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    fail "gateway socket not created within 15s; check ${VAR_DIR}/server.log and ${VAR_DIR}/proxy.out"
+}
+
+stop() {
+    log "stopping"
+    for pid_file in "$PROXY_PID_FILE" "$SERVER_PID_FILE"; do
+        if [ -f "$pid_file" ]; then
+            local pid
+            pid="$(cat "$pid_file" 2>/dev/null)"
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                kill -TERM "$pid" 2>/dev/null || true
+                # Spec: TERM first, then KILL after at most 10s.
+                local j=0
+                while [ "$j" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+                    sleep 1
+                    j=$((j + 1))
+                done
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+            rm -f "$pid_file"
+        fi
+    done
+    # belt-and-braces: clean up any stragglers
+    pkill -f "node server.cjs" 2>/dev/null || true
+    pkill -f "node proxy.cjs"  2>/dev/null || true
+    rm -f "$GATEWAY_SOCKET_FILE" 2>/dev/null || true
+    exit 0
+}
+
+status() {
+    if is_running; then
+        exit 0
+    fi
+    exit 3
+}
+
+case "${1:-}" in
+    start)  start ;;
+    stop)   stop ;;
+    status) status ;;
+    *)      fail "Usage: $0 {start|stop|status}" ;;
+esac

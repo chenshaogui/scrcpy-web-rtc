@@ -93,6 +93,7 @@ const STRINGS = {
         optReset: "重置",
         optInvalidExtra: "键值对格式错误",
         audioAutoDisabled: "设备音频不可用，已自动关闭",
+        wsAudioUnsupported: "此浏览器不支持解码音频",
     },
     en: {
         refresh: "Refresh devices",
@@ -157,6 +158,7 @@ const STRINGS = {
         optReset: "Reset",
         optInvalidExtra: "Invalid key/value",
         audioAutoDisabled: "Device audio unavailable — auto-disabled",
+        wsAudioUnsupported: "Browser can't decode audio over WS",
     },
 };
 
@@ -195,10 +197,15 @@ if (tokenParam !== null) {
 const TOKEN = localStorage.getItem("scrcpy-webrtc-token") || "";
 
 const BACKEND = localStorage.getItem("scrcpy-webrtc-backend") || "";
-const HTTP_BASE = BACKEND ? `https://${BACKEND}` : "";
+// Pick up the gateway prefix automatically. When opened directly the
+// pathname is "/" so the prefix is empty and absolute URLs stay root-based.
+// When served behind fnOS the pathname is "/app/scrcpy-webrtc", so we
+// prefix every API/WebSocket call with it.
+const PREFIX = BACKEND ? "" : location.pathname.startsWith("/app/") ? "/app/scrcpy-webrtc" : location.pathname.replace(/\/$/, "");
+const HTTP_BASE = BACKEND ? `https://${BACKEND}` : PREFIX;
 const WS_BASE = BACKEND
     ? `wss://${BACKEND}`
-    : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+    : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${PREFIX}`;
 
 function promptBackend() {
     const input = prompt(t.backendPrompt, BACKEND);
@@ -417,6 +424,123 @@ let audioEnabled = session.audioEnabled !== false;
 let lastClipFromDevice = null;
 let lastClipToDevice = null;
 
+// ── WS-path audio (opus over the control WebSocket) ─────────────
+// Audio normally rides the WebRTC track; on the WS fallback path it arrives
+// as tagged binary frames (tag 2, same 10-byte header as video) and is
+// decoded with WebCodecs and scheduled through an AudioContext. Suspended
+// until the first unmute tap so autoplay policy is satisfied.
+let audioCtx = null;
+let audioGain = null;
+let audioDecoder = null;
+let audioSinkTime = 0;
+let wsAudioEnabled = true;
+// set when AudioDecoder is missing or rejects the opus codec — keeps the
+// tag-2 packet handler from retrying on every frame
+let audioDecoderFailed = false;
+
+function ensureAudioDecoder() {
+    if (audioDecoder || audioDecoderFailed) return;
+    if (typeof AudioDecoder === "undefined") {
+        audioDecoderFailed = true;
+        console.warn("ws audio: AudioDecoder unavailable in this browser");
+        setBadge(t.wsAudioUnsupported, "warn");
+        return;
+    }
+    audioDecoder = new AudioDecoder({
+        output: scheduleAudioChunk,
+        error: (e) => console.warn("ws audio decode error:", e?.message ?? e),
+    });
+    try {
+        // scrcpy's opus stream is 48 kHz stereo; frames arrive one per packet
+        audioDecoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 2 });
+    } catch (e) {
+        audioDecoderFailed = true;
+        console.warn("ws audio: opus not supported by AudioDecoder:", e?.message ?? e);
+        setBadge(t.wsAudioUnsupported, "warn");
+        try { audioDecoder.close(); } catch {}
+        audioDecoder = null;
+    }
+}
+
+function scheduleAudioChunk(audioData) {
+    try {
+        ensureAudioGraph();
+        // muted: still decode to keep the pipeline warm, but never schedule
+        if (muted) return;
+        if (audioCtx.state !== "running") {
+            // couldn't resume yet (no user gesture) — try once more from this
+            // callback; if that fails too, drop this chunk so we don't pile
+            // up a multi-second lead that would play out as a laggy blast
+            audioCtx.resume().catch(() => {});
+            if (audioCtx.state !== "running") return;
+        }
+        const frameCount = audioData.numberOfFrames;
+        const channels = audioData.numberOfChannels;
+        const buffer = audioCtx.createBuffer(channels, frameCount, audioData.sampleRate);
+        for (let c = 0; c < channels; c++) {
+            const plane = new Float32Array(frameCount);
+            audioData.copyTo(plane, { planeIndex: c, format: "f32-planar" });
+            buffer.copyToChannel(plane, c);
+        }
+        const src = audioCtx.createBufferSource();
+        src.buffer = buffer;
+        // pace by arrival; keep a small safety delay and never run into the past
+        audioSinkTime = Math.max(audioSinkTime, audioCtx.currentTime + 0.03);
+        // if a long stall let the lead balloon (e.g. tab backgrounded), snap
+        // back so the stream catches up instead of playing in slow motion
+        if (audioSinkTime - audioCtx.currentTime > 0.5) audioSinkTime = audioCtx.currentTime + 0.03;
+        src.start(audioSinkTime);
+        audioSinkTime += frameCount / audioData.sampleRate;
+    } catch (e) {
+        console.warn("ws audio play error:", e?.message ?? e);
+    } finally {
+        audioData.close();
+    }
+}
+
+function teardownWsAudio() {
+    try { audioDecoder?.close(); } catch {}
+    audioDecoder = null;
+    audioSinkTime = 0;
+    wsAudioEnabled = true;
+}
+
+// ---- RTP audio via WebAudio ------------------------------------------------
+// The <video> element must stay muted (iOS would otherwise present its native
+// fullscreen player the moment it outputs sound). The remote audio track is
+// therefore pumped through an AudioContext graph that feeds the same audioGain
+// node the WS path uses, so the 🔊 toggle controls both paths identically.
+let rtcAudio = null; // { src, stream }
+
+function ensureAudioGraph() {
+    audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+    audioGain ??= (() => {
+        const g = audioCtx.createGain();
+        g.connect(audioCtx.destination);
+        return g;
+    })();
+    audioGain.gain.value = muted ? 0 : 1;
+}
+
+function setupRtcAudio(track) {
+    if (track.kind !== "audio") return;
+    teardownRtcAudio();
+    try {
+        ensureAudioGraph();
+        const stream = new MediaStream([track]);
+        const src = audioCtx.createMediaStreamSource(stream);
+        src.connect(audioGain);
+        rtcAudio = { src, stream };
+    } catch (e) {
+        console.warn("rtc audio via WebAudio failed:", e?.message ?? e);
+    }
+}
+
+function teardownRtcAudio() {
+    try { rtcAudio?.src.disconnect(); } catch {}
+    rtcAudio = null;
+}
+
 function setBadge(text, cls = "") {
     badgeEl.hidden = !text;
     badgeEl.textContent = text;
@@ -603,6 +727,9 @@ function teardownRtc() {
     pc = null;
     videoEl?.remove();
     videoEl = null;
+    // back to the WS path — its audio pipeline takes over again
+    wsAudioEnabled = true;
+    teardownRtcAudio();
     if (path === "rtc") {
         path = "ws";
         if (canvas) canvas.style.display = "";
@@ -626,6 +753,10 @@ function disconnect() {
     canvas = null;
     currentSerial = null;
     path = "ws";
+    teardownWsAudio();
+    // keep the AudioContext alive (sources are torn down above anyway) so a
+    // later reconnect does not need another tap on 🔊 to get sound back
+    audioCtx?.resume().catch(() => {});
     // drop the previous stream's geometry too, so the next connection starts
     // from a clean slate instead of inheriting a stale orientation
     streamW = 0;
@@ -731,6 +862,22 @@ function connect(serial) {
         }
         if (!writer) return;
         const buf = new Uint8Array(ev.data);
+        const tag = buf[0];
+        if (tag === 2) {
+            // audio frame on the WS path: tag(1) + reserved(1) + pts(8) + opus
+            if (!wsAudioEnabled) return;
+            if (audioDecoderFailed) return;
+            ensureAudioDecoder();
+            if (audioDecoder && audioDecoder.state === "configured") {
+                const pts = new DataView(ev.data).getBigUint64(2);
+                audioDecoder.decode(new EncodedAudioChunk({
+                    type: "key",
+                    timestamp: Number(pts) / 1000, // µs → ms-ish; only monotonicity matters here
+                    data: buf.subarray(10),
+                }));
+            }
+            return;
+        }
         const dv = new DataView(ev.data);
         const data = buf.subarray(10);
         const packet = buf[0] === 0
@@ -815,8 +962,17 @@ async function acceptRtcOffer(sdp, extraIce) {
             videoEl = document.createElement("video");
             videoEl.className = "screen-video";
             videoEl.autoplay = true;
-            videoEl.muted = muted;  // start in the user's remembered state
+            // iOS hijacks any <video> that outputs sound into its native
+            // fullscreen player, and dismissing that player leaves the
+            // element half-dead. Keep the element permanently muted and
+            // route RTP audio through WebAudio instead (setupRtcAudio).
+            videoEl.muted = true;
+            videoEl.defaultMuted = true;
+            videoEl.setAttribute("muted", "");
             videoEl.playsInline = true;
+            // iOS Safari only honors the *attribute* in some WebViews
+            videoEl.setAttribute("playsinline", "");
+            videoEl.setAttribute("webkit-playsinline", "");
             videoEl.srcObject = new MediaStream();
             stageEl.appendChild(videoEl);
             attachInput(videoEl);
@@ -827,6 +983,7 @@ async function acceptRtcOffer(sdp, extraIce) {
             videoEl.addEventListener("resize", autoRotate);
         }
         videoEl.srcObject.addTrack(e.track);
+        setupRtcAudio(e.track);
         videoEl.play().catch((err) => console.warn("video.play() rejected:", err));
     };
     await pc.setRemoteDescription({ type: "offer", sdp });
@@ -853,8 +1010,28 @@ function watchRtcStats() {
         const { packetsReceived = 0, framesDecoded = 0, framesReceived = 0, pliCount = 0 } = inbound;
         if (path !== "rtc") {
             if (framesDecoded > 0 && videoEl) {
+                // Mobile WebViews (WeChat XWeb in particular) reject
+                // programmatic play() without a user gesture. Only take over
+                // the stage once the <video> is actually playing; meanwhile
+                // retry every tick — any tap on the stage (attachInput)
+                // doubles as the gesture that unlocks it, and the WS canvas
+                // stays visible as the fallback.
+                if (videoEl.paused) {
+                    videoEl.play?.().catch(() => {});
+                    // Some WebViews (iOS XWeb, in particular) refuse to start a
+                    // MediaStream <video> until a real user gesture has happened
+                    // on the page. Keep retrying indefinitely — the 🔊 tap (and
+                    // any tap on the stage) is that gesture, and once play()
+                    // resolves we flip to the rtc path on the next tick.
+                    ticksWithoutDecode++;
+                    if (ticksWithoutDecode === 10) {
+                        console.warn("webrtc: video paused, waiting for a gesture to unlock play()", inbound);
+                    }
+                    return;
+                }
                 path = "rtc";
                 if (canvas) canvas.style.display = "none";
+                wsAudioEnabled = false; // audio now flows via the RTP track
                 videoEl.play?.().catch(() => {});
                 sendWs({ t: "video-path", mode: "rtc" });
             } else {
@@ -898,10 +1075,16 @@ function norm(el, e) {
     let { width, height } = rect;
     let ox = 0;
     let oy = 0;
-    if (el.videoWidth) {
-        const scale = Math.min(rect.width / el.videoWidth, rect.height / el.videoHeight);
-        width = el.videoWidth * scale;
-        height = el.videoHeight * scale;
+    // <video> exposes the stream size via videoWidth; the decode canvas
+    // carries it in width/height. Both can be letterboxed inside their
+    // element box (.screen uses height:100% + object-fit:contain), and the
+    // tap point must be mapped onto the *content* rect, not the element rect.
+    const iw = el.videoWidth || el.width;
+    const ih = el.videoHeight || el.height;
+    if (iw && ih && !(iw === 300 && ih === 150)) { // ignore the default canvas size
+        const scale = Math.min(rect.width / iw, rect.height / ih);
+        width = iw * scale;
+        height = ih * scale;
         ox = (rect.width - width) / 2;
         oy = (rect.height - height) / 2;
     }
@@ -915,6 +1098,11 @@ function attachInput(el) {
     let down = false;
     el.onpointerdown = (e) => {
         el.setPointerCapture(e.pointerId);
+        if (el.tagName === "VIDEO") {
+            // a tap is a user gesture — unlock a P2P <video> that mobile
+            // WebViews paused despite autoplay (WeChat XWeb)
+            el.play?.().catch(() => {});
+        }
         down = true;
         sendControl({ t: "touch", a: "down", ...norm(el, e) });
         e.preventDefault();
@@ -1439,12 +1627,19 @@ $("btn-mute").addEventListener("pointerup", () => {
     // not persisted: every new tab/session begins silent so the browser's
     // autoplay policy is satisfied without a NotAllowedError on first play
     paintSoundButton();
-    // both audio and video tracks live on videoEl — toggle its muted
-    // property to switch audio playback
+    // both audio paths (WS decode + RTP track) flow through audioGain, so
+    // toggling its gain mutes/unmutes either one. videoEl itself must stay
+    // muted — an unmuted <video> makes iOS pop up its native player.
     if (videoEl) {
-        videoEl.muted = muted;
+        videoEl.muted = true;
         videoEl.play?.().catch(() => {});
     }
+    // this tap is the user gesture that lets the WS audio pipeline start too.
+    // create the AudioContext here (within the gesture) if the very first
+    // audio packet hasn't arrived yet — otherwise resume() on a still-null
+    // ctx is a no-op and the stream stays silent until the user taps again
+    try { ensureAudioGraph(); } catch {}
+    audioCtx.resume().catch(() => {});
 });
 $("btn-mute").addEventListener("pointerleave", cancelSoundPress);
 $("btn-mute").addEventListener("pointercancel", cancelSoundPress);

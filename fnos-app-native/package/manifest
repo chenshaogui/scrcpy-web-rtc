@@ -1,0 +1,14 @@
+appname=scrcpy-webrtc
+version=0.1.9
+display_name=云手机助手
+desc=通过 WebRTC 在飞牛桌面上镜像和控制 Android 设备。支持 redroid 等无线 adb 设备，界面上可直接 adb connect。
+source=thirdparty
+platform=arm
+maintainer=陈绍贵
+distributor=陈绍贵
+os_min_version=1.1.3100
+install_dep_apps=nodejs_v22
+desktop_uidir=ui
+desktop_applaunchname=scrcpy-webrtc.main
+ctl_stop=true
+changelog=0.1.1：端口改 18010，避开与 scrcpyNas (8000/8010) 冲突；启动脚本按 fnOS 真实布局自动探测 server.cjs 位置。

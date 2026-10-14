@@ -4,7 +4,13 @@
 *.sh   text eol=lf
 *.mjs  text eol=lf
 *.js   text eol=lf
+*.cjs  text eol=lf
 Dockerfile text eol=lf
+
+# fnOS package scripts are extensionless bash scripts that run on the NAS,
+# so they must stay LF as well (a CRLF shebang breaks them the same way)
+fnos-app-native/package/cmd/* text eol=lf
+fnos-app-native/package/app/ui/config text eol=lf
 
 # Binary files: never let git touch them
 *.bin  binary

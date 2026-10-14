@@ -1,0 +1,13 @@
+#!/bin/bash
+# Config-change post-hook (native): restart the app so any new settings
+# take effect.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+APP_DIR="${TRIM_APPDEST:-/var/apps/scrcpy-webrtc/target}"
+
+if [ -x "${APP_DIR}/cmd/main" ]; then
+    "${APP_DIR}/cmd/main" stop  || true
+    "${APP_DIR}/cmd/main" start || true
+fi
+exit 0
