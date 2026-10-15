@@ -870,8 +870,10 @@ function sendWs(obj) {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
+
 function sendControl(obj) {
-    if (dc?.readyState === "open") dc.send(JSON.stringify(obj));
+    const viaDc = dc?.readyState === "open";
+    if (viaDc) dc.send(JSON.stringify(obj));
     else sendWs(obj);
 }
 
@@ -1342,11 +1344,17 @@ function attachInput(el) {
     };
 
     el.onpointerdown = (e) => {
-        if (!e.isPrimary) return;
-        // previous gesture never got its pointerup (iOS system gesture
-        // stole it) — close it before opening a new one, otherwise the
-        // device thinks two fingers are down and every subsequent tap
-        // feels laggy / off-target.
+        // Do NOT gate on e.isPrimary here. On iOS WebKit a fast second tap
+        // fires its pointerdown *before* the first tap's pointerup arrives,
+        // so WebKit reports the new pointer as isPrimary=false; the old
+        // `if (!e.isPrimary) return;` silently dropped it, so the device got
+        // an UP with no matching DOWN and every-other tap vanished (typing
+        // 123456 registered 1,3,6). Desktop Chrome never hits this because a
+        // mouse pointerup always precedes the next pointerdown. This surface
+        // only ever models one finger (ScrcpyPointerId.Finger), so the newest
+        // pointer always wins: finish any still-open gesture (which emits its
+        // "up") then start the new one — DOWN→UP pairs stay intact no matter
+        // how fast the taps come.
         if (activeId !== null) finish();
         activeId = e.pointerId;
         activeRect = el.getBoundingClientRect();
@@ -1363,7 +1371,8 @@ function attachInput(el) {
     };
 
     el.onpointermove = (e) => {
-        if (activeId === null || e.pointerId !== activeId || !e.isPrimary) return;
+        // track by pointerId only — isPrimary is unreliable on iOS (see above)
+        if (activeId === null || e.pointerId !== activeId) return;
         // coalesce: WebKit fires pointermove faster than rAF on iOS
         // (120 Hz touch sampling vs 60 Hz display on iPhone 11), and the
         // last position in a frame is what matters — earlier positions in

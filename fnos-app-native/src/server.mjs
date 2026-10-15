@@ -798,10 +798,28 @@ async function handleSession(ws, req) {
     // pokes. Chain them through one promise so order is preserved and each
     // injection finishes before the next begins. Kept per-connection.
     let controlChain = Promise.resolve();
+    // Ordering alone isn't enough: scrcpy-server reads the control socket in a
+    // tight loop and stamps every injected MotionEvent with the device's
+    // SystemClock.uptimeMillis() — a 1 ms-resolution clock — at processing time.
+    // A fast burst of taps arrives over WebRTC within a few ms, so the server
+    // injects several DOWN/UP pairs inside the *same* millisecond. redroid's
+    // InputDispatcher collapses those degenerate (downTime == eventTime)
+    // presses, and the on-screen keyboard swallows every-other tap (typing
+    // 123456 registers 1,3,6). Pace consecutive injections so each lands in its
+    // own millisecond and reads as a discrete press. ~12 ms sits well below
+    // human tap cadence (a tap = DOWN..UP ≈ 12 ms hold) but comfortably above
+    // the ms clock granularity, and stays under the client's ~16 ms move rate
+    // so drags keep flowing. Long-press still works: a held finger emits no
+    // intermediate events, so the gap never stretches the DOWN→UP hold.
+    let lastControlAt = 0;
+    const MIN_CONTROL_GAP_MS = 12;
     const handleControl = (msg) => {
         if (!controller || !video) return;
         controlChain = controlChain.then(async () => {
             if (!controller || !video) return;
+            const wait = lastControlAt + MIN_CONTROL_GAP_MS - Date.now();
+            if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+            lastControlAt = Date.now();
             if (msg.t === "touch") {
                 await controller.injectTouch({
                     action: ACTION_MAP[msg.a],
