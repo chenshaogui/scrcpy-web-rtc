@@ -61,6 +61,8 @@ const STRINGS = {
         noBackendHint: "未配置后端 — 在网址后加 ?server=后端域名",
         backendDown: "后端连接失败",
         backendDownHint: (b) => `连不上 ${b} — 检查服务是否在线，或用 ?server= 换个地址`,
+        hostError: "设备主机不可用",
+        hostErrorHint: (m) => `后端在线，但获取设备失败：${m}（通常是本机 adb 未启动，先运行 adb start-server）`,
         noDevices: "无设备 — 请先 adb connect",
         noDevicesHint: "后端正常，但没有已连接的设备",
         adbConnect: "ADB 连接",
@@ -137,6 +139,8 @@ const STRINGS = {
         noBackendHint: "No backend set — append ?server=your-domain to the URL",
         backendDown: "Backend unreachable",
         backendDownHint: (b) => `Cannot reach ${b} — check the service, or use ?server= to change it`,
+        hostError: "Device host unavailable",
+        hostErrorHint: (m) => `Backend is up but listing devices failed: ${m} (usually adb isn't running — try "adb start-server")`,
         noDevices: "No devices — run adb connect first",
         noDevicesHint: "Backend is up, but no devices are connected",
         adbConnect: "ADB connect",
@@ -648,29 +652,41 @@ async function loadDevices() {
             }
             return;
         }
-    } else try {
-        const res = await fetch(`${HTTP_BASE}/api/devices`, {
-            headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {},
-        });
+    } else {
+        let res;
+        try {
+            res = await fetch(`${HTTP_BASE}/api/devices`, {
+                headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {},
+            });
+        } catch {
+            // fetch itself rejected: the backend host is unreachable — either
+            // no backend was ever configured (static hosting) or the configured
+            // one is down. Only here does asking for a backend address make sense.
+            if (!BACKEND) {
+                placeholder(t.noBackend);
+                setBadge(t.noBackendHint, "error");
+                promptBackend();
+            } else {
+                placeholder(t.backendDown);
+                setBadge(t.backendDownHint(BACKEND), "error");
+            }
+            return;
+        }
         if (res.status === 401) {
             placeholder(t.unauthorized);
             setBadge(t.unauthorizedHint, "error");
             return;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        devices = await res.json();
-    } catch {
-        // guide the user instead of a dead "retry": either the backend was
-        // never configured (static hosting), or the configured one is down
-        if (!BACKEND) {
-            placeholder(t.noBackend);
-            setBadge(t.noBackendHint, "error");
-            promptBackend();
-        } else {
-            placeholder(t.backendDown);
-            setBadge(t.backendDownHint(BACKEND), "error");
+        if (!res.ok) {
+            // the server answered but errored (usually the adb host isn't
+            // reachable / no device host). Surface the real cause instead of a
+            // misleading "configure your backend" prompt — the backend is fine.
+            const body = await res.json().catch(() => ({}));
+            placeholder(t.hostError);
+            setBadge(t.hostErrorHint(body.error || `HTTP ${res.status}`), "error");
+            return;
         }
-        return;
+        devices = await res.json();
     }
     if (devices.length === 0) {
         placeholder(t.noDevices);
