@@ -139,6 +139,16 @@ export class DeviceStore {
         return entry;
     }
 
+    // drop a saved target so it disappears from /api/devices. returns true
+    // if an entry was actually removed (false → unknown serial, no-op).
+    wirelessDisconnect(serial) {
+        const list = this._read();
+        const next = list.filter((d) => d.serial !== serial);
+        if (next.length === list.length) return false;
+        this._write(next);
+        return true;
+    }
+
     async createTransport({ serial }) {
         const list = this._read();
         const d = list.find((x) => x.serial === serial);

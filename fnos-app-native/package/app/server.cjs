@@ -37216,6 +37216,15 @@ var DeviceStore = class {
     this._write(list);
     return entry;
   }
+  // drop a saved target so it disappears from /api/devices. returns true
+  // if an entry was actually removed (false → unknown serial, no-op).
+  wirelessDisconnect(serial) {
+    const list = this._read();
+    const next = list.filter((d) => d.serial !== serial);
+    if (next.length === list.length) return false;
+    this._write(next);
+    return true;
+  }
   async createTransport({ serial }) {
     const list = this._read();
     const d = list.find((x) => x.serial === serial);
@@ -62348,6 +62357,23 @@ var httpServer = (0, import_node_http.createServer)(async (req, res) => {
       await adbClient.wirelessConnect(`${ip}:${port}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e.message || String(e) }));
+    }
+    return;
+  }
+  if (url.pathname === "/api/adb-disconnect") {
+    const serial = url.searchParams.get("serial")?.trim();
+    if (!serial) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "missing serial" }));
+      return;
+    }
+    try {
+      const removed = adbClient.wirelessDisconnect(serial);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, removed }));
     } catch (e) {
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: e.message || String(e) }));

@@ -55,7 +55,7 @@ const STRINGS = {
         audioEncoderWarning: (c) => `${c} 音频无法经 WebRTC 播放（仅 opus）`,
         kbdPlaceholder: "输入文字，回车发送到设备",
         send: "发送",
-        emptyStage: "点击右下角 ⚙ 选择设备开始镜像",
+        emptyStage: "👆 点这里，选择设备开始镜像",
         loadingDevices: "加载设备中…",
         noBackend: "未配置后端地址",
         noBackendHint: "未配置后端 — 在网址后加 ?server=后端域名",
@@ -94,6 +94,17 @@ const STRINGS = {
         optInvalidExtra: "键值对格式错误",
         audioAutoDisabled: "设备音频不可用，已自动关闭",
         wsAudioUnsupported: "此浏览器不支持解码音频",
+        disconnect: "断开连接",
+        disconnectShort: "断开",
+        devicesTitle: "已保存的连接",
+        connectNow: "连接",
+        currentConnected: "使用中",
+        deleteConn: "删除此连接",
+        confirmDelete: (s) => `确定删除 ${s}？`,
+        noSavedDevices: "暂无已保存的连接 — 在下方输入 IP 添加",
+        deviceRemoved: "已删除",
+        deviceDeleteFailed: (m) => `删除失败：${m}`,
+        offlineTag: "离线",
     },
     en: {
         refresh: "Refresh devices",
@@ -120,7 +131,7 @@ const STRINGS = {
         audioEncoderWarning: (c) => `${c} audio can't play over WebRTC (opus only)`,
         kbdPlaceholder: "Type text, press Enter to send",
         send: "Send",
-        emptyStage: "Tap the ⚙ button (bottom-right) to pick a device",
+        emptyStage: "👆 Tap here to pick a device and start",
         loadingDevices: "Loading devices…",
         noBackend: "Backend not configured",
         noBackendHint: "No backend set — append ?server=your-domain to the URL",
@@ -159,6 +170,17 @@ const STRINGS = {
         optInvalidExtra: "Invalid key/value",
         audioAutoDisabled: "Device audio unavailable — auto-disabled",
         wsAudioUnsupported: "Browser can't decode audio over WS",
+        disconnect: "Disconnect",
+        disconnectShort: "Disconnect",
+        devicesTitle: "Saved connections",
+        connectNow: "Connect",
+        currentConnected: "In use",
+        deleteConn: "Delete this connection",
+        confirmDelete: (s) => `Delete ${s}?`,
+        noSavedDevices: "No saved connections — add one below by IP",
+        deviceRemoved: "Removed",
+        deviceDeleteFailed: (m) => `delete failed: ${m}`,
+        offlineTag: "offline",
     },
 };
 
@@ -302,16 +324,18 @@ for (const [id, key] of [
     ["btn-back", "back"], ["btn-home", "home"], ["btn-recents", "recents"], ["btn-kbd", "keyboard"],
     ["btn-shell", "shell"], ["shell-close", "close"],
     ["btn-settings", "settings"], ["settings-close", "close"],
+    ["btn-disconnect", "disconnect"],
 ]) $(id).title = t[key];
 // the settings sheet labels its rows in text rather than tooltips
 for (const [id, key] of [
-    ["settings-title", "settings"], ["label-device", "device"],
-    ["label-refresh", "refresh"], ["label-adb-connect", "adbConnect"],
+    ["settings-title", "settings"], ["label-device", "devicesTitle"],
+    ["label-adb-connect", "adbConnect"],
     ["label-quality", "quality"],
     ["label-encoder", "encoder"], ["label-audio-encoder", "audioEncoder"],
     ["label-sound", "sound"], ["label-fullscreen", "fullscreen"],
     ["label-power", "power"], ["label-back", "back"], ["label-home", "home"],
     ["label-recents", "recents"], ["label-kbd", "keyboard"], ["label-shell", "shell"],
+    ["label-disconnect", "disconnectShort"],
     ["label-custom-options", "customOptions"], ["label-opt-extra", "optExtra"],
 ]) $(id).textContent = t[key];
 $("opt-extra-add").textContent = t.optAdd;
@@ -435,6 +459,9 @@ let decoder = null;
 let writer = null;
 let canvas = null;
 let currentSerial = null;
+// last /api/devices payload, kept so the sheet can re-paint active/online
+// state every time it opens or the session drops — without refetching.
+let lastDevices = [];
 
 let pc = null;
 let dc = null;
@@ -647,6 +674,7 @@ async function loadDevices() {
     if (devices.length === 0) {
         placeholder(t.noDevices);
         setBadge(t.noDevicesHint, "error");
+        renderDeviceList([]);
         return;
     }
     setBadge("");
@@ -657,20 +685,82 @@ async function loadDevices() {
         opt.textContent = `${d.model?.replaceAll("_", " ") ?? d.product ?? t.device} · ${d.serial}`;
         deviceSelect.appendChild(opt);
     }
-    // already connected: the list is only there to be kept in sync
-    if (currentSerial && devices.some((d) => d.serial === currentSerial)) {
-        deviceSelect.value = currentSerial;
+    // render an explicit device list — no auto-connect. on phones the user
+    // must tap a device (row or 连接) before its screen appears.
+    renderDeviceList(devices);
+}
+
+// build the tappable saved-connection rows inside the sheet. each row shows an
+// online/offline dot, name + serial, and carries a 连接 / 删除 pair; tapping the
+// row itself connects, so the phone-sized tap target isn't a tiny button.
+function renderDeviceList(devices) {
+    lastDevices = devices || [];
+    const list = $("device-list");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!lastDevices.length) {
+        const empty = document.createElement("div");
+        empty.className = "device-empty";
+        empty.textContent = t.noSavedDevices;
+        list.appendChild(empty);
         return;
     }
-    // prefer: last mirrored device > the device we just adb-connected > sole device
-    const adbTarget = session.adbHost ? `${session.adbHost}:${session.adbPort || 5555}` : "";
-    const again = devices.find((d) => d.serial === session.serial)
-        ?? devices.find((d) => d.serial === adbTarget)
-        ?? (devices.length === 1 ? devices[0] : null);
-    if (again) {
-        deviceSelect.value = again.serial;
-        connect(again.serial);
-        setSettingsOpen(false);
+    for (const d of lastDevices) {
+        const isActive = d.serial === currentSerial;
+        const row = document.createElement("div");
+        row.className = "device-item" + (isActive ? " active" : "") + (d.offline ? " offline" : "");
+        const dot = document.createElement("span");
+        dot.className = "device-dot";
+        const info = document.createElement("div");
+        info.className = "device-info";
+        const name = document.createElement("span");
+        name.className = "device-name";
+        name.textContent = d.model?.replaceAll("_", " ") || d.product || t.device;
+        const addr = document.createElement("small");
+        addr.className = "device-addr";
+        addr.textContent = `${d.serial}${d.offline ? " · " + t.offlineTag : ""}`;
+        info.append(name, addr);
+        const actions = document.createElement("div");
+        actions.className = "device-actions";
+        const conn = document.createElement("button");
+        conn.type = "button";
+        conn.className = "mini device-connect" + (isActive ? " on" : "");
+        conn.textContent = isActive ? t.currentConnected : t.connectNow;
+        conn.addEventListener("pointerdown", (e) => e.preventDefault());
+        conn.onclick = (e) => { e.stopPropagation(); if (!isActive) { connect(d.serial); setSettingsOpen(false); } };
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "mini device-del";
+        del.title = t.deleteConn;
+        del.setAttribute("aria-label", t.deleteConn);
+        del.textContent = "✕";
+        del.addEventListener("pointerdown", (e) => e.preventDefault());
+        del.onclick = (e) => { e.stopPropagation(); removeDevice(d.serial); };
+        actions.append(conn, del);
+        row.append(dot, info, actions);
+        row.onclick = () => { if (!isActive) { connect(d.serial); setSettingsOpen(false); } };
+        list.appendChild(row);
+    }
+}
+
+async function removeDevice(serial) {
+    if (!confirm(t.confirmDelete(serial))) return;
+    try {
+        const res = await fetch(
+            `${HTTP_BASE}/api/adb-disconnect?serial=${encodeURIComponent(serial)}`,
+            { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {} },
+        );
+        if (res.status === 401) { setBadge(t.unauthorizedHint, "error"); return; }
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        if (currentSerial === serial) disconnect();
+        // the removed row vanishing IS the confirmation; a toast badge would
+        // sit behind the open sheet anyway.
+        await loadDevices();
+    } catch (e) {
+        setBadge(t.deviceDeleteFailed(e.message), "error");
     }
 }
 
@@ -819,6 +909,8 @@ function disconnect() {
     paintRotateButton();
     stageEl.innerHTML = "";
     setBadge("");
+    paintDisconnect();
+    renderDeviceList(lastDevices);
 }
 
 // the host reads quality and encoders when it builds a session, so replaying
@@ -834,6 +926,7 @@ function restoreSession(serial) {
 function connect(serial) {
     disconnect();
     currentSerial = serial;
+    paintDisconnect();
     rememberSession({ serial });
     setBadge(t.connecting);
     if (SIGNAL) {
@@ -946,6 +1039,11 @@ function connect(serial) {
     ws.onclose = (e) => {
         if (currentSerial !== serial) return;
         setBadge(e.code === 4001 ? t.unauthorizedHint : t.disconnected, "error");
+        // the socket died on its own — reflect it in the sheet: drop the
+        // "使用中" highlight so the same device is one tap to reconnect.
+        currentSerial = null;
+        paintDisconnect();
+        renderDeviceList(lastDevices);
     };
 }
 
@@ -1573,7 +1671,29 @@ function setSettingsOpen(open) {
     // a finger slides out of a button across a select dropdown) from being
     // forwarded as a touch to the device
     stageEl.style.pointerEvents = open ? "none" : "";
+    // iOS: freeze the page so opening the sheet (or focusing a field inside
+    // it) can't scroll the body and make the fixed sheet "float".
+    document.body.classList.toggle("sheet-open", open);
+    if (open) {
+        settingsSheet.scrollTop = 0;
+        renderDeviceList(lastDevices); // always show live active/online state
+    }
 }
+
+// the 断开 tile is only meaningful mid-session; dimming it when idle stops it
+// looking broken before anything is connected.
+function paintDisconnect() {
+    const b = $("btn-disconnect");
+    if (!b) return;
+    b.classList.toggle("off", !currentSerial);
+}
+
+// no session yet → make the whole black stage tappable to open the device
+// sheet, so the entry point isn't a tiny ⚙ the user has to hunt for.
+stageEl.addEventListener("click", () => {
+    if (!currentSerial && stageEl.childElementCount === 0) setSettingsOpen(true);
+});
+paintDisconnect();
 $("settings-close").onclick = () => setSettingsOpen(false);
 settingsBackdrop.onclick = () => setSettingsOpen(false);
 
@@ -1642,6 +1762,12 @@ fab.onclick = () => {
         return;
     }
     setSettingsOpen(settingsSheet.hidden);
+};
+
+$("btn-disconnect").onclick = () => {
+    disconnect();
+    loadDevices();
+    setSettingsOpen(true);
 };
 
 deviceSelect.onchange = () => {

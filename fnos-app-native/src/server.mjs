@@ -426,6 +426,23 @@ const httpServer = createServer(async (req, res) => {
         }
         return;
     }
+    if (url.pathname === "/api/adb-disconnect") {
+        const serial = url.searchParams.get("serial")?.trim();
+        if (!serial) {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "missing serial" }));
+            return;
+        }
+        try {
+            const removed = adbClient.wirelessDisconnect(serial);
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true, removed }));
+        } catch (e) {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+        }
+        return;
+    }
     // don't ship the ~400 KB bundle through the tunnel. an interstitial
     // rather than a redirect: silently bouncing a visitor to another domain
     // looks like hijacking, and self-hosters need to know how to opt out
