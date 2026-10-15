@@ -141,8 +141,10 @@ async function main() {
         const stage = await stageFor(target);
         process.stdout.write(`[build] staged at ${stage}\n`);
 
-        // fnpack writes the fpk into the cwd; run from the project root
-        // so the previous scrcpy-webrtc.fpk (if any) is overwritten.
+        // fnpack writes the fpk into the cwd, named after the manifest
+        // `appname`; run from the project root so any previous build is
+        // overwritten. Derive the name from the manifest rather than
+        // hardcoding it, so renaming the app doesn't break packaging.
         const cwd = root;
         const r = spawnSync(fnpack, ["build", "--directory", stage], {
             cwd,
@@ -150,13 +152,14 @@ async function main() {
         });
         if (r.status !== 0) throw new Error(`fnpack exited with status ${r.status}`);
 
-        const built = join(cwd, "scrcpy-webrtc.fpk");
-        if (!existsSync(built)) throw new Error("fnpack succeeded but no .fpk was found");
+        const manifestData = readFileSync(join(packageSrc, "manifest"), "utf8");
+        const appname = (manifestData.match(/^appname=(.*)$/m) || [, "scrcpy-webrtc"])[1].trim();
+        const built = join(cwd, `${appname}.fpk`);
+        if (!existsSync(built)) throw new Error(`fnpack succeeded but no ${appname}.fpk was found`);
 
-        // rename to scrcpy-webrtc_<version>_<arch>.fpk
-        const version = (readFileSync(join(packageSrc, "manifest"), "utf8")
-            .match(/^version=(.*)$/m) || [, "0.0.0"])[1].trim();
-        const finalName = `scrcpy-webrtc_${version}_${target.fnpackName}.fpk`;
+        // rename to <appname>_<version>_<arch>.fpk
+        const version = (manifestData.match(/^version=(.*)$/m) || [, "0.0.0"])[1].trim();
+        const finalName = `${appname}_${version}_${target.fnpackName}.fpk`;
         const finalPath = join(distDir, finalName);
         await rename(built, finalPath);
         process.stdout.write(`[build] → ${finalPath} (${statSync2(finalPath).size} B)\n`);

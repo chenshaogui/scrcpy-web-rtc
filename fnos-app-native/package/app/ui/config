@@ -1,13 +1,13 @@
 {
   ".url": {
-    "scrcpy-webrtc.main": {
+    "scrcpy-remote.main": {
       "title": "云手机助手",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "",
-      "gatewayPrefix": "/app/scrcpy-webrtc",
+      "gatewayPrefix": "/app/scrcpy-remote",
       "gatewaySocket": "app.sock",
-      "url": "/app/scrcpy-webrtc",
+      "url": "/app/scrcpy-remote",
       "allUsers": true
     }
   }

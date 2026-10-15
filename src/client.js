@@ -221,9 +221,10 @@ const TOKEN = localStorage.getItem("scrcpy-webrtc-token") || "";
 const BACKEND = localStorage.getItem("scrcpy-webrtc-backend") || "";
 // Pick up the gateway prefix automatically. When opened directly the
 // pathname is "/" so the prefix is empty and absolute URLs stay root-based.
-// When served behind fnOS the pathname is "/app/scrcpy-webrtc", so we
-// prefix every API/WebSocket call with it.
-const PREFIX = BACKEND ? "" : location.pathname.startsWith("/app/") ? "/app/scrcpy-webrtc" : location.pathname.replace(/\/$/, "");
+// When served behind fnOS the pathname is "/app/<appname>", so we lift that
+// first /app/<name> segment and prefix every API/WebSocket call with it —
+// derived from the URL rather than hardcoded, so renaming the app just works.
+const PREFIX = BACKEND ? "" : (location.pathname.match(/^(\/app\/[^/]+)/) || [])[1] ?? location.pathname.replace(/\/$/, "");
 const HTTP_BASE = BACKEND ? `https://${BACKEND}` : PREFIX;
 const WS_BASE = BACKEND
     ? `wss://${BACKEND}`

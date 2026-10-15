@@ -1,5 +1,5 @@
-appname=scrcpy-webrtc
-version=0.1.11
+appname=scrcpy-remote
+version=0.1.13
 display_name=云手机助手
 desc=通过 WebRTC 在飞牛桌面上镜像和控制 Android 设备。支持 redroid 等无线 adb 设备，界面上可直接 adb connect。
 source=thirdparty
@@ -9,6 +9,6 @@ distributor=陈绍贵
 os_min_version=1.1.3100
 install_dep_apps=nodejs_v22
 desktop_uidir=ui
-desktop_applaunchname=scrcpy-webrtc.main
+desktop_applaunchname=scrcpy-remote.main
 ctl_stop=true
-changelog=0.1.1：端口改 18010，避开与 scrcpyNas (8000/8010) 冲突；启动脚本按 fnOS 真实布局自动探测 server.cjs 位置。0.1.10：针对 iPhone 11 / iOS 17.7 场景优化触摸与输入法 —— pointermove 改为 rAF 帧合并避免 120Hz 采样被硬截半；blur/visibilitychange 与新 pointerdown 兜底释放被系统手势吞掉的 pointerup，防止手指卡在设备上；.screen / .screen-video / #stage 补 -webkit-touch-callout / user-select: none 堵住长按弹层抢事件；kbd bar 与物理键盘都加了 composition 事件处理，中文选词回车不再被误当发送，字符不再丢失。0.1.11：修复 redroid 安卓软键盘点数字迟钝 —— 服务端把 touch/key/text 控制消息改为单条 FIFO 串行队列下发，消除快速连点时 down/up 在共享 ADB 控制 socket 上乱序被读成长按/多指的问题。
+changelog=0.1.1：端口改 18010，避开与 scrcpyNas (8000/8010) 冲突；启动脚本按 fnOS 真实布局自动探测 server.cjs 位置。0.1.10：针对 iPhone 11 / iOS 17.7 场景优化触摸与输入法 —— pointermove 改为 rAF 帧合并避免 120Hz 采样被硬截半；blur/visibilitychange 与新 pointerdown 兜底释放被系统手势吞掉的 pointerup，防止手指卡在设备上；.screen / .screen-video / #stage 补 -webkit-touch-callout / user-select: none 堵住长按弹层抢事件；kbd bar 与物理键盘都加了 composition 事件处理，中文选词回车不再被误当发送，字符不再丢失。0.1.11：修复 redroid 安卓软键盘点数字迟钝 —— 服务端把 touch/key/text 控制消息改为单条 FIFO 串行队列下发，消除快速连点时 down/up 在共享 ADB 控制 socket 上乱序被读成长按/多指的问题。0.1.12：更换应用图标 —— 高饱和蓝青渐变圆角徽标，白色手机+投屏信号波，一眼可辨；圆角外透明，修掉旧图标四角的空白点。0.1.13：图标文件名改为 cph_* 并更新 ui/config，强制刷新飞牛应中心的图标缓存。

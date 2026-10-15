@@ -18,13 +18,13 @@
 set -u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-APP_DIR="${TRIM_APPDEST:-/vol1/@appcenter/scrcpy-webrtc}"
+APP_DIR="${TRIM_APPDEST:-/vol1/@appcenter/scrcpy-remote}"
 VAR_DIR="${TRIM_PKGVAR:-$APP_DIR/var}"
 LOG_FILE="${VAR_DIR}/app.log"
 SERVER_PID_FILE="${VAR_DIR}/server.pid"
 PROXY_PID_FILE="${VAR_DIR}/proxy.pid"
 GATEWAY_SOCKET_FILE="${APP_DIR}/app.sock"
-GATEWAY_PREFIX="/app/scrcpy-webrtc"
+GATEWAY_PREFIX="/app/scrcpy-remote"
 # 18010 — picked high to avoid collisions with other apps (e.g. scrcpyNas
 # often grabs 8000/8010). The fnOS unified gateway only cares about the
 # unix socket below; this port is just for the inner HTTP server.
