@@ -773,9 +773,18 @@ async function handleSession(ws, req) {
         }
     };
 
+    // Every control message writes to the same ADB control socket. Kicking
+    // each one off as an independent async task lets a fast tap's `down`
+    // overtake the previous tap's `up` on the wire — the on-screen Android
+    // keyboard (e.g. tapping digits in redroid) then reads it as a stray
+    // long-press / second finger, so the key only registers after several
+    // pokes. Chain them through one promise so order is preserved and each
+    // injection finishes before the next begins. Kept per-connection.
+    let controlChain = Promise.resolve();
     const handleControl = (msg) => {
         if (!controller || !video) return;
-        (async () => {
+        controlChain = controlChain.then(async () => {
+            if (!controller || !video) return;
             if (msg.t === "touch") {
                 await controller.injectTouch({
                     action: ACTION_MAP[msg.a],
@@ -817,7 +826,7 @@ async function handleSession(ws, req) {
                     });
                 }
             }
-        })().catch((e) => log("control error:", e.message));
+        }).catch((e) => log("control error:", e.message));
     };
 
     // registered before scrcpy startup so WebRTC negotiation runs in parallel

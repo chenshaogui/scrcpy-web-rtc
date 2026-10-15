@@ -791,6 +791,10 @@ function teardownRtc() {
 }
 
 function disconnect() {
+    // close any in-flight drag before the socket dies — otherwise the peer
+    // is left holding a phantom finger until the scrcpy session times out
+    releaseActiveTouch?.();
+    releaseActiveTouch = null;
     teardownRtc();
     resetEncoderOptions();
     resetAudioEncoderOptions();
@@ -1132,9 +1136,11 @@ function watchRtcStats() {
     }, 500);
 }
 
-// normalized [0,1] coordinates; accounts for letterboxing in <video>
-function norm(el, e) {
-    const rect = el.getBoundingClientRect();
+// normalized [0,1] coordinates; accounts for letterboxing in <video>.
+// `rect` is optional — attachInput caches one per gesture and passes it in
+// so a fast drag doesn't re-measure layout 100× a second.
+function norm(el, e, rect) {
+    rect ??= el.getBoundingClientRect();
     if (viewRotation) {
         // inside the rotator the element fills its box exactly (no
         // letterbox) — but the box is rotated, so un-rotate the point
@@ -1167,28 +1173,103 @@ function norm(el, e) {
     };
 }
 
+// ── pointer input ────────────────────────────────────────────────
+// Goals:
+//   1) One synchronous layout per gesture, not per event — mobile WebViews
+//      sample pointermove at 60–120 Hz, and calling getBoundingClientRect
+//      at that rate forces repeated reflows that make taps feel laggy.
+//   2) Batch moves into one send per animation frame. iPhone 11 samples
+//      touches at 120 Hz while the display runs at 60 Hz; a hard 16 ms
+//      cutoff drops every other sample, whereas rAF picks exactly the last
+//      position of each frame — the one that actually gets shown.
+//   3) Track only the primary pointer, keyed by pointerId — a stray second
+//      finger no longer flips the shared "down" flag and silently drops
+//      the main drag.
+//   4) Recover from iOS's habit of eating pointerup when a system gesture
+//      (app switcher, notification pull-down, edge swipe) interrupts a
+//      drag. Without an explicit release the device keeps the finger
+//      pressed and the next tap looks like a bogus second pointer.
+// module-scope hook set by attachInput; blur / visibilitychange invoke it
+// to synthesize an "up" when the current gesture can no longer complete.
+let releaseActiveTouch = null;
+window.addEventListener("blur", () => releaseActiveTouch?.());
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) releaseActiveTouch?.();
+});
+
 function attachInput(el) {
-    let down = false;
+    let activeId = null;
+    let activeRect = null;
+    let lastPos = null; // fallback coords for the synthesized "up"
+    let pendingMove = null;
+    let rafId = 0;
+
+    const flushMove = () => {
+        rafId = 0;
+        if (!pendingMove) return;
+        const p = pendingMove;
+        pendingMove = null;
+        lastPos = p;
+        sendControl({ t: "touch", a: "move", x: p.x, y: p.y });
+    };
+
+    const finish = (p) => {
+        if (activeId === null) return;
+        const id = activeId;
+        activeId = null;
+        activeRect = null;
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+        pendingMove = null;
+        try { el.releasePointerCapture(id); } catch {}
+        const up = p || lastPos || { x: 0.5, y: 0.5 };
+        sendControl({ t: "touch", a: "up", x: up.x, y: up.y });
+        lastPos = null;
+    };
+
     el.onpointerdown = (e) => {
-        el.setPointerCapture(e.pointerId);
+        if (!e.isPrimary) return;
+        // previous gesture never got its pointerup (iOS system gesture
+        // stole it) — close it before opening a new one, otherwise the
+        // device thinks two fingers are down and every subsequent tap
+        // feels laggy / off-target.
+        if (activeId !== null) finish();
+        activeId = e.pointerId;
+        activeRect = el.getBoundingClientRect();
+        try { el.setPointerCapture(e.pointerId); } catch {}
         if (el.tagName === "VIDEO") {
             // a tap is a user gesture — unlock a P2P <video> that mobile
             // WebViews paused despite autoplay (WeChat XWeb)
             el.play?.().catch(() => {});
         }
-        down = true;
-        sendControl({ t: "touch", a: "down", ...norm(el, e) });
+        const p = norm(el, e, activeRect);
+        lastPos = p;
+        sendControl({ t: "touch", a: "down", x: p.x, y: p.y });
         e.preventDefault();
     };
+
     el.onpointermove = (e) => {
-        if (down) sendControl({ t: "touch", a: "move", ...norm(el, e) });
+        if (activeId === null || e.pointerId !== activeId || !e.isPrimary) return;
+        // coalesce: WebKit fires pointermove faster than rAF on iOS
+        // (120 Hz touch sampling vs 60 Hz display on iPhone 11), and the
+        // last position in a frame is what matters — earlier positions in
+        // the same frame are strictly superseded.
+        pendingMove = norm(el, e, activeRect);
+        if (!rafId) rafId = requestAnimationFrame(flushMove);
     };
-    const up = (e) => {
-        if (down) sendControl({ t: "touch", a: "up", ...norm(el, e) });
-        down = false;
+
+    const end = (e) => {
+        if (activeId === null || e.pointerId !== activeId) return;
+        finish(norm(el, e, activeRect));
     };
-    el.onpointerup = up;
-    el.onpointercancel = up;
+    el.onpointerup = end;
+    el.onpointercancel = end;
+
+    // register a "release now" hook so a global blur / visibilitychange can
+    // lift the finger when iOS kills the gesture mid-flight. Reassigned on
+    // every attachInput (new canvas on reconnect) — the stale closure gets
+    // GC'd with its canvas.
+    releaseActiveTouch = () => { if (activeId !== null) finish(); };
+
     el.onwheel = (e) => {
         e.preventDefault();
         sendControl({ t: "scroll", ...norm(el, e), dx: -e.deltaX / 100, dy: -e.deltaY / 100 });
@@ -1262,40 +1343,91 @@ function handleShellMessage(msg) {
 
 // physical keyboard passthrough (desktop); form fields keep their own keys
 const isFormField = (t) => ["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName);
+
+// Chinese / Japanese / Korean IMEs do their magic via composition events:
+// during composition Chrome/Edge fire keydown with `e.key === "Process"`
+// (or `keyCode === 229` on Safari) and only expose the final string through
+// `compositionend`. Without listening for it, non-ASCII typing was silently
+// dropped here — the pinyin letters got filtered by `e.key.length === 1`,
+// the composed Chinese never arrived.
+window.addEventListener("compositionend", (e) => {
+    if (isFormField(e.target) || !currentSerial) return;
+    if (e.data) sendControl({ t: "text", text: e.data });
+});
+
 window.onkeydown = (e) => {
     if (isFormField(e.target) || !currentSerial) return;
+    if (e.isComposing || e.keyCode === 229) return; // IME is mid-composition
     if (e.key === "Backspace") sendControl({ t: "key", code: 67, a: "down" });
     else if (e.key === "Enter") sendControl({ t: "key", code: 66, a: "down" });
     else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) sendControl({ t: "text", text: e.key });
 };
 window.onkeyup = (e) => {
     if (isFormField(e.target) || !currentSerial) return;
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Backspace") sendControl({ t: "key", code: 67, a: "up" });
     else if (e.key === "Enter") sendControl({ t: "key", code: 66, a: "up" });
 };
 
 // on-screen keyboard bar (mobile: summons the local IME, forwards to device)
-function sendKbdText() {
+// Composition state: while the user is picking a candidate, `.value` is
+// empty and pressing Enter means "commit the candidate", not "send to
+// device". We gate both the Enter handler and the send button so the
+// composed text lands in `.value` before we ship it — that was the cause
+// of the "字要一点点去点" report.
+let kbdComposing = false;
+let kbdPendingSend = false;
+
+function flushKbdText() {
     const text = kbdInput.value;
     if (text) {
         sendControl({ t: "text", text });
         kbdInput.value = "";
     } else {
+        // empty box + Enter = literal Enter on the device (matches the
+        // previous behavior for password fields etc.)
         sendControl({ t: "key", code: 66, a: "down" });
         sendControl({ t: "key", code: 66, a: "up" });
     }
 }
+function sendKbdText() {
+    if (kbdComposing) {
+        // defer — compositionend will call us once the IME commits
+        kbdPendingSend = true;
+        return;
+    }
+    kbdPendingSend = false;
+    flushKbdText();
+}
+
+kbdInput.addEventListener("compositionstart", () => { kbdComposing = true; });
+kbdInput.addEventListener("compositionend", () => {
+    kbdComposing = false;
+    if (kbdPendingSend) {
+        kbdPendingSend = false;
+        // let the browser finish writing the committed text into `.value`
+        // before we read it
+        requestAnimationFrame(flushKbdText);
+    }
+});
+
 $("btn-kbd").onclick = () => {
     setSettingsOpen(false); // the sheet would cover the bar it just opened
     kbdBar.hidden = !kbdBar.hidden;
     if (!kbdBar.hidden) kbdInput.focus();
 };
+// the send button must not steal focus (and thus commit the IME panel
+// unexpectedly) on mobile; touchstart preventDefault keeps the input hot.
+$("kbd-send").addEventListener("pointerdown", (e) => e.preventDefault());
 $("kbd-send").onclick = sendKbdText;
 kbdInput.onkeydown = (e) => {
     if (e.key === "Enter") {
+        // candidate-commit Enter from a Chinese IME — pass through to the IME
+        if (e.isComposing || e.keyCode === 229 || kbdComposing) return;
         e.preventDefault();
         sendKbdText();
-    } else if (e.key === "Backspace" && !kbdInput.value) {
+    } else if (e.key === "Backspace" && !kbdInput.value
+        && !e.isComposing && e.keyCode !== 229 && !kbdComposing) {
         sendControl({ t: "key", code: 67, a: "down" });
         sendControl({ t: "key", code: 67, a: "up" });
     }
