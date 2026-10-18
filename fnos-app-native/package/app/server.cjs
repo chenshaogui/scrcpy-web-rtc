@@ -62314,6 +62314,14 @@ async function listDevices() {
   const devices = await adbClient.getDevices();
   return devices.map((d) => ({ serial: d.serial, product: d.product, model: d.model }));
 }
+async function lockDevice(adb) {
+  const socket = await adb.createSocket("shell:input keyevent 223");
+  await new Promise((r) => setTimeout(r, 200));
+  try {
+    await socket.close();
+  } catch {
+  }
+}
 var httpServer = (0, import_node_http.createServer)(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname.startsWith("/api/")) {
@@ -62493,6 +62501,7 @@ function sanitizeCustomOptions(input) {
   }
   return Object.keys(out).length ? out : null;
 }
+var deviceSessions = /* @__PURE__ */ new Map();
 wss.on("connection", handleSession);
 async function handleSession(ws, req) {
   const reqUrl = new URL(req.url, "http://localhost");
@@ -62505,6 +62514,27 @@ async function handleSession(ws, req) {
     log39("rejected: bad token");
     ws.close(4001, "unauthorized");
     return;
+  }
+  let registered = false;
+  const selfClose = () => {
+    replaced = true;
+    try {
+      ws.close(4e3, "replaced by a new session");
+    } catch {
+    }
+  };
+  if (serial) {
+    const prev = deviceSessions.get(serial);
+    if (prev) {
+      log39("another session is open for this device \u2014 closing it first");
+      try {
+        prev();
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    deviceSessions.set(serial, selfClose);
+    registered = true;
   }
   let scrcpy;
   let rtc = null;
@@ -62530,6 +62560,8 @@ async function handleSession(ws, req) {
   let clipboardFromDevice = null;
   let clipboardToDevice = null;
   let adb = null;
+  let transport = null;
+  let replaced = false;
   let pty = null;
   let ptyWriter = null;
   const sendSignal = (obj) => {
@@ -62825,7 +62857,7 @@ async function handleSession(ws, req) {
     }
   });
   try {
-    const transport = await adbClient.createTransport({ serial });
+    transport = await adbClient.createTransport({ serial });
     adb = new Adb(transport);
     const pushServer = () => AdbScrcpyClient.pushServer(
       adb,
@@ -62991,11 +63023,28 @@ async function handleSession(ws, req) {
       ws.send(JSON.stringify({ type: "error", message: String(e) }));
     }
   } finally {
+    if (registered && deviceSessions.get(serial) === selfClose) {
+      deviceSessions.delete(serial);
+    }
     ws.close();
     closePty();
     rtc?.close();
     try {
       await scrcpy?.close();
+    } catch {
+    }
+    if (adb && !replaced) {
+      try {
+        await lockDevice(adb);
+      } catch {
+      }
+    }
+    try {
+      adb?.close?.();
+    } catch {
+    }
+    try {
+      await transport?.close?.();
     } catch {
     }
     log39("session closed");

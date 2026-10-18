@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "scrcpy-remote-docker.main": {
+      "title": "云手机助手(Docker)",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "8010",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

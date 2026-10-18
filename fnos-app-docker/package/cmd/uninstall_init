@@ -1,0 +1,6 @@
+#!/bin/bash
+# Uninstall pre-hook (docker): fnOS tears down the docker-project (compose down)
+# and removes the app dir. We do not touch the image or user data here. Must
+# exit 0.
+set -u
+exit 0

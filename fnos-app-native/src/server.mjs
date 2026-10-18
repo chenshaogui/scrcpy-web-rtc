@@ -374,6 +374,17 @@ async function listDevices() {
     return devices.map((d) => ({ serial: d.serial, product: d.product, model: d.model }));
 }
 
+// Put the device to sleep — the cloud-phone "lock". KEYCODE_SLEEP (223) via a
+// one-shot shell; fire-and-forget, then drop the socket. Some redroid builds
+// ignore it, so callers treat it as best-effort.
+async function lockDevice(adb) {
+    const socket = await adb.createSocket("shell:input keyevent 223");
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+        await socket.close();
+    } catch { /* ignore */ }
+}
+
 const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname.startsWith("/api/")) {
@@ -570,6 +581,11 @@ function sanitizeCustomOptions(input) {
     return Object.keys(out).length ? out : null;
 }
 
+// One live session per device (serial -> close fn). See handleSession: a new
+// viewer evicts the previous one so the device's single-client adbd isn't
+// fought over (that used to surface as the second connect getting ECONNRESET).
+const deviceSessions = new Map();
+
 wss.on("connection", handleSession);
 
 // the whole session speaks through ws.send/on("message")/close/readyState,
@@ -592,6 +608,27 @@ async function handleSession(ws, req) {
         log("rejected: bad token");
         ws.close(4001, "unauthorized");
         return;
+    }
+    // One session per device: evict any existing viewer of this same serial
+    // before grabbing adbd. The evicted session is flagged `replaced` so it
+    // releases its transport WITHOUT locking the screen out from under us.
+    let registered = false;
+    const selfClose = () => {
+        replaced = true;
+        try {
+            ws.close(4000, "replaced by a new session");
+        } catch { /* ignore */ }
+    };
+    if (serial) {
+        const prev = deviceSessions.get(serial);
+        if (prev) {
+            log("another session is open for this device — closing it first");
+            try { prev(); } catch { /* ignore */ }
+            // give the old transport a moment to drop before reconnecting
+            await new Promise((r) => setTimeout(r, 400));
+        }
+        deviceSessions.set(serial, selfClose);
+        registered = true;
     }
     let scrcpy;
     let rtc = null;
@@ -629,6 +666,8 @@ async function handleSession(ws, req) {
     let clipboardFromDevice = null; // loop guards for bidirectional sync
     let clipboardToDevice = null;
     let adb = null;
+    let transport = null;
+    let replaced = false;
     let pty = null;
     let ptyWriter = null;
 
@@ -977,7 +1016,7 @@ async function handleSession(ws, req) {
     });
 
     try {
-        const transport = await adbClient.createTransport({ serial });
+        transport = await adbClient.createTransport({ serial });
         adb = new Adb(transport);
 
         // the scrcpy server unlinks its own jar right after startup, so the
@@ -1169,12 +1208,31 @@ async function handleSession(ws, req) {
             ws.send(JSON.stringify({ type: "error", message: String(e) }));
         }
     } finally {
+        if (registered && deviceSessions.get(serial) === selfClose) {
+            deviceSessions.delete(serial);
+        }
         ws.close();
         closePty();
         rtc?.close();
         try {
             await scrcpy?.close();
         } catch {}
+        // A user-initiated end (disconnect button / window closed, not a
+        // takeover): put the cloud phone to sleep. Best-effort.
+        if (adb && !replaced) {
+            try {
+                await lockDevice(adb);
+            } catch { /* ignore */ }
+        }
+        // Release the device's adbd immediately. The old code never closed the
+        // transport, so the single-client slot stayed held by a half-open socket
+        // and the next connect got ECONNRESET.
+        try {
+            adb?.close?.();
+        } catch { /* ignore */ }
+        try {
+            await transport?.close?.();
+        } catch { /* ignore */ }
         log("session closed");
     }
 }

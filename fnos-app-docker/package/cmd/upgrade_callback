@@ -1,0 +1,6 @@
+#!/bin/bash
+# Upgrade post-hook (docker): fnOS re-creates the container from the updated
+# docker-project resource. The locally built image is rebuilt on next up since
+# the shipped context changed. Nothing extra here. Must exit 0.
+set -u
+exit 0

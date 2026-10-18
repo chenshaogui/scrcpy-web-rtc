@@ -1,0 +1,5 @@
+#!/bin/bash
+# Install pre-hook (docker): nothing to pre-stage — fnOS lays out the app dir
+# and pulls/builds the image via the docker-project resource. Must exit 0.
+set -u
+exit 0

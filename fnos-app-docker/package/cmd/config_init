@@ -1,0 +1,4 @@
+#!/bin/bash
+# Config-change pre-hook (docker): no validation needed. Must exit 0.
+set -u
+exit 0

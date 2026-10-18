@@ -1,0 +1,37 @@
+services:
+  scrcpy-remote-docker:
+    # Online image mode: pull the prebuilt multi-arch image from Docker Hub
+    # (linux/amd64 + linux/arm64). No local build, so the NAS never has to
+    # fetch a base image / apt / npm / GitHub — installs and starts fast.
+    #
+    # NOTE: the currently-published :latest was built before the adb upgrade,
+    # so wireless redroid may still show `offline`. Rebuild + push the image
+    # (Dockerfile now installs the newer `adb` package) to pick up the fix.
+    image: qychan/scrcpy-webrtc:latest
+    container_name: scrcpy-remote-docker
+    restart: unless-stopped
+    ports:
+      # Container listens on 8010 (Dockerfile PORT default). fnOS maps the
+      # manifest.service_port (8010) on the host straight to it.
+      - "${TRIM_SERVICE_PORT}:8010"
+    environment:
+      TZ: Asia/Shanghai
+      HOST: 0.0.0.0
+      PORT: 8010
+      # Direct mode: server.mjs connects straight to each device's adbd via
+      # @yume-chan (no adb-server / adb binary). The only reliable path on
+      # arm64, where the image's adb is 29.0.6 and can't handshake with modern
+      # redroid adbd, leaving devices stuck `offline`.
+      ADB_DIRECT: "1"
+      # Persist the direct-mode device list + RSA key in the mounted volume so
+      # "ADB 连接" additions and device trust survive container restarts.
+      TRIM_PKGVAR: /root/.android
+    volumes:
+      # Persist the adb host keys so devices keep their trust across restarts.
+      - "${TRIM_PKGVAR}:/root/.android"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8010)+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

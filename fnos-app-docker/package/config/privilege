@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "scrcpy-remote-docker",
+  "groupname": "scrcpy-remote-docker"
+}

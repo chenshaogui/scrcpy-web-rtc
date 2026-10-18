@@ -1,0 +1,5 @@
+#!/bin/bash
+# Upgrade pre-hook (docker): fnOS stops the docker-project before replacing
+# files. Nothing extra here. Must exit 0.
+set -u
+exit 0

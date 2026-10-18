@@ -18,6 +18,7 @@ import { ScrcpyPointerId, ScrcpyInstanceId, AndroidMotionEventAction } from "@yu
 import qrcode from "qrcode-terminal";
 import { createRtcSession } from "./webrtc.mjs";
 import { SignalRoom, DEFAULT_BROKERS, b64u } from "./signal.mjs";
+import { DeviceStore } from "./deviceStore.mjs";
 
 function argValue(...names) {
     for (const name of names) {
@@ -56,6 +57,11 @@ Options:
   -p, --port <n>          HTTP/WebSocket listen port            (default 8010)
       --adb-host <host>   adb server host                  (default 127.0.0.1)
       --adb-port <n>      adb server port                       (default 5037)
+      --direct-adb        connect straight to each device's adbd over TCP with
+                          no adb-server / adb binary; needed where the adb
+                          binary is too old (arm64 Debian ships 29.0.6). Also
+                          enabled by env ADB_DIRECT=1 or a .direct-adb file
+                          next to this script
 
       --shell             enable the device shell; requires a token, one is
                           generated if --token is absent (mirroring stays open)
@@ -97,7 +103,7 @@ Options:
   -v, --version           show version
 
 Environment:
-  PORT, ADB_HOST, ADB_PORT, SCRCPY_WEBRTC_TOKEN, SCRCPY_WEBRTC_PAGE, VIDEO_ENCODER,
+  PORT, ADB_HOST, ADB_PORT, ADB_DIRECT, SCRCPY_WEBRTC_TOKEN, SCRCPY_WEBRTC_PAGE, VIDEO_ENCODER,
   AUDIO_ENCODER, TUNWG_API, TUNWG_BIN, CLOUDFLARED_PATH, WUSH_BIN, TURN_URL,
   TURN_AUTH,
   CF_TURN_KEY_ID, CF_TURN_API_TOKEN, SCRCPY_WEBRTC_SIGNAL_BROKERS
@@ -131,7 +137,7 @@ const KNOWN_FLAGS = new Set([
     "--port", "-p", "--adb-host", "--adb-port", "--shell", "--token", "--page",
     "--tunnel", "--tunnel-api", "--tunnel-auth", "--turn", "--turn-auth",
     "--signal", "--no-signal", "--signal-broker", "--no-page", "--no-qr",
-    "--video-encoder", "--audio-encoder",
+    "--video-encoder", "--audio-encoder", "--direct-adb",
     "--help", "-h", "--version", "-v",
 ]);
 for (const arg of process.argv.slice(2)) {
@@ -274,9 +280,28 @@ function tokenValid(given) {
     return a.length === b.length && timingSafeEqual(a, b);
 }
 
-const adbClient = new AdbServerClient(
-    new AdbServerNodeTcpConnector({ host: ADB_HOST, port: ADB_PORT }),
-);
+// Two ADB backends:
+//   adb-server (default): talk to an external `adb` server through
+//     @yume-chan/adb-server-node-tcp. Used by the public web / USB hosts.
+//   direct: connect straight to each device's adbd over TCP with @yume-chan/adb's
+//     AdbDaemonTransport — no `adb` binary at all. Needed on arm64, where Debian
+//     only ships an ancient adb (29.0.6) that can't handshake with modern
+//     redroid/Android adbd and leaves devices stuck `offline`. Enable with env
+//     ADB_DIRECT=1, the --direct-adb flag, or a `.direct-adb` marker file next
+//     to this script (the marker lets you flip a running container without
+//     recreating it).
+const DIRECT_ADB =
+    process.argv.includes("--direct-adb") ||
+    /^(1|true|yes|on)$/i.test(process.env.ADB_DIRECT ?? "") ||
+    existsSync(join(PKG_DIR, ".direct-adb"));
+const adbClient = DIRECT_ADB
+    ? new DeviceStore()
+    : new AdbServerClient(
+        new AdbServerNodeTcpConnector({ host: ADB_HOST, port: ADB_PORT }),
+    );
+if (DIRECT_ADB) {
+    console.log("adb: direct mode (AdbDaemonTransport, no adb-server)");
+}
 
 // prefer the server.bin bundled in this package; fall back to
 // @yume-chan/fetch-scrcpy-server's download location (dev checkout)
@@ -370,7 +395,25 @@ function compressed(key, encoding, data) {
 
 async function listDevices() {
     const devices = await adbClient.getDevices();
-    return devices.map((d) => ({ serial: d.serial, product: d.product, model: d.model }));
+    return devices.map((d) => ({
+        serial: d.serial,
+        product: d.product,
+        model: d.model,
+        // direct mode flags unreachable targets so the page can grey them out
+        // instead of the device silently vanishing from the list
+        ...(d.offline ? { offline: true } : {}),
+    }));
+}
+
+// Put the device to sleep — the cloud-phone "lock". KEYCODE_SLEEP (223) via a
+// one-shot shell; fire-and-forget, then drop the socket. Some redroid builds
+// ignore it, so callers treat it as best-effort.
+async function lockDevice(adb) {
+    const socket = await adb.createSocket("shell:input keyevent 223");
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+        await socket.close();
+    } catch { /* ignore */ }
 }
 
 const httpServer = createServer(async (req, res) => {
@@ -416,9 +459,43 @@ const httpServer = createServer(async (req, res) => {
             return;
         }
         try {
-            await adbClient.wireless.connect(`${ip}:${port}`);
+            if (DIRECT_ADB) {
+                await adbClient.wirelessConnect(`${ip}:${port}`);
+            } else {
+                await adbClient.wireless.connect(`${ip}:${port}`);
+            }
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+            // ya-webadb throws AlreadyConnectedError when adb-server replies
+            // "already connected to <addr>". That is a success, not a failure —
+            // the device is already reachable and listed by adb-server. Treating
+            // it as an error made the page show "adb connect failed" and skip
+            // refreshing the device list, so an already-paired device looked
+            // absent. Report ok so the caller reloads devices and finds it.
+            if (e?.name === "AlreadyConnectedError" || /already connected/i.test(e?.message || "")) {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify({ ok: true, already: true }));
+                return;
+            }
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: e.message || String(e) }));
+        }
+        return;
+    }
+    if (url.pathname === "/api/adb-disconnect") {
+        const serial = url.searchParams.get("serial")?.trim();
+        if (!serial) {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "missing serial" }));
+            return;
+        }
+        try {
+            // direct mode: drop the saved target so it leaves /api/devices.
+            // adb-server mode has no persistent store to edit, so it's a no-op.
+            const removed = DIRECT_ADB ? adbClient.wirelessDisconnect(serial) : false;
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true, removed }));
         } catch (e) {
             res.writeHead(500, { "content-type": "application/json" });
             res.end(JSON.stringify({ error: e.message || String(e) }));
@@ -552,6 +629,11 @@ function sanitizeCustomOptions(input) {
     return Object.keys(out).length ? out : null;
 }
 
+// One live session per device (serial -> close fn). See handleSession: a new
+// viewer evicts the previous one so the device's single-client adbd isn't
+// fought over (that used to surface as the second connect getting ECONNRESET).
+const deviceSessions = new Map();
+
 wss.on("connection", handleSession);
 
 // the whole session speaks through ws.send/on("message")/close/readyState,
@@ -574,6 +656,27 @@ async function handleSession(ws, req) {
         log("rejected: bad token");
         ws.close(4001, "unauthorized");
         return;
+    }
+    // One session per device: evict any existing viewer of this same serial
+    // before grabbing adbd. The evicted session is flagged `replaced` so it
+    // releases its transport WITHOUT locking the screen out from under us.
+    let registered = false;
+    const selfClose = () => {
+        replaced = true;
+        try {
+            ws.close(4000, "replaced by a new session");
+        } catch { /* ignore */ }
+    };
+    if (serial) {
+        const prev = deviceSessions.get(serial);
+        if (prev) {
+            log("another session is open for this device — closing it first");
+            try { prev(); } catch { /* ignore */ }
+            // give the old transport a moment to drop before reconnecting
+            await new Promise((r) => setTimeout(r, 400));
+        }
+        deviceSessions.set(serial, selfClose);
+        registered = true;
     }
     let scrcpy;
     let rtc = null;
@@ -611,6 +714,8 @@ async function handleSession(ws, req) {
     let clipboardFromDevice = null; // loop guards for bidirectional sync
     let clipboardToDevice = null;
     let adb = null;
+    let transport = null;
+    let replaced = false;
     let pty = null;
     let ptyWriter = null;
 
@@ -959,7 +1064,7 @@ async function handleSession(ws, req) {
     });
 
     try {
-        const transport = await adbClient.createTransport({ serial });
+        transport = await adbClient.createTransport({ serial });
         adb = new Adb(transport);
 
         // the scrcpy server unlinks its own jar right after startup, so the
@@ -1139,12 +1244,31 @@ async function handleSession(ws, req) {
             ws.send(JSON.stringify({ type: "error", message: String(e) }));
         }
     } finally {
+        if (registered && deviceSessions.get(serial) === selfClose) {
+            deviceSessions.delete(serial);
+        }
         ws.close();
         closePty();
         rtc?.close();
         try {
             await scrcpy?.close();
         } catch {}
+        // A user-initiated end (disconnect button / window closed, not a
+        // takeover): put the cloud phone to sleep. Direct mode only, best-effort.
+        if (DIRECT_ADB && adb && !replaced) {
+            try {
+                await lockDevice(adb);
+            } catch { /* ignore */ }
+        }
+        // Release the device's adbd immediately. The old code never closed the
+        // transport, so the single-client slot stayed held by a half-open socket
+        // and the next connect got ECONNRESET.
+        try {
+            adb?.close?.();
+        } catch { /* ignore */ }
+        try {
+            await transport?.close?.();
+        } catch { /* ignore */ }
         log("session closed");
     }
 }

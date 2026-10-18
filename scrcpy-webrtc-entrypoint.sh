@@ -12,11 +12,21 @@
 
 set -euo pipefail
 
+# Direct mode (ADB_DIRECT / --direct-adb) talks to each device's adbd straight
+# over TCP and needs no `adb` binary or adb-server at all, so skip every adb
+# step below in that mode.
+case "${ADB_DIRECT:-}" in
+    1|true|TRUE|yes|on|YES|On) DIRECT=1 ;;
+    *) DIRECT="" ;;
+esac
+
 # 1. Local adb-server so the Node app has something to talk to.
-adb start-server >/dev/null 2>&1 || true
+if [[ -z "$DIRECT" ]]; then
+    adb start-server >/dev/null 2>&1 || true
+fi
 
 # 2. Optionally attach a wireless-adb device.
-if [[ -n "${ADB_DEVICE_HOST:-}" ]]; then
+if [[ -z "$DIRECT" && -n "${ADB_DEVICE_HOST:-}" ]]; then
     port="${ADB_DEVICE_PORT:-5555}"
     echo "[entrypoint] adb connect $ADB_DEVICE_HOST:$port"
     for _ in $(seq 1 10); do

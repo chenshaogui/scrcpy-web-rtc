@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# scrcpy-remote-docker lifecycle entry — fnOS Docker app, compliant with the official
+# Docker application template.
+#
+# start   -> 0 ok
+# stop    -> 0 ok
+# status  -> 0 running / 3 not running
+# other   -> 1, with a user-visible error in $TRIM_TEMP_LOGFILE
+#
+# Unlike the native variant, the container itself is created / started /
+# stopped by fnOS through the `docker-project` resource declared in
+# config/resource (it runs `docker compose` against app/docker/docker-compose.yaml).
+# So start/stop here are no-ops; only `status` has to accurately report whether
+# the container is up, which drives the start/stop button + running badge in
+# the app center.
+#
+# CONTAINER_NAME must match `container_name` in docker-compose.yaml, otherwise
+# status will always report "not running".
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+CONTAINER_NAME="scrcpy-remote-docker"
+
+is_running() {
+    docker inspect "$CONTAINER_NAME" 2>/dev/null | grep -q '"Status": "running"'
+}
+
+case "${1:-}" in
+    start)
+        # fnOS owns compose up; nothing extra to launch.
+        exit 0
+        ;;
+    stop)
+        # fnOS owns compose down; nothing extra to stop.
+        exit 0
+        ;;
+    status)
+        if is_running; then
+            exit 0
+        fi
+        exit 3
+        ;;
+    *)
+        echo "Unknown command: $1" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}" 2>/dev/null || true
+        exit 1
+        ;;
+esac

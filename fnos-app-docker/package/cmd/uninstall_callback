@@ -1,0 +1,9 @@
+#!/bin/bash
+# Uninstall post-hook (docker): best-effort cleanup of the locally built image
+# so a reinstall rebuilds from the shipped context. Failure is non-fatal (the
+# image may be shared or already gone). Must exit 0.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+docker rmi scrcpy-webrtc:fnos >/dev/null 2>&1 || true
+exit 0

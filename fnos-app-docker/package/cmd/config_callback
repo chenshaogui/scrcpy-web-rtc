@@ -1,0 +1,5 @@
+#!/bin/bash
+# Config-change post-hook (docker): fnOS re-creates the container from the
+# docker-project resource so new settings take effect. Nothing extra here.
+set -u
+exit 0

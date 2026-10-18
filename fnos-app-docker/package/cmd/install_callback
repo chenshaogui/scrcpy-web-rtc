@@ -1,0 +1,5 @@
+#!/bin/bash
+# Install post-hook (docker): fnOS brings the container up via the
+# docker-project resource after install. Nothing extra here. Must exit 0.
+set -u
+exit 0
