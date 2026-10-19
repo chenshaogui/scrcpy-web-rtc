@@ -111,8 +111,9 @@ const STRINGS = {
         openInBrowser: "外部浏览器",
         openInBrowserBtn: "🌐 打开并复制",
         openInBrowserHint: "用系统浏览器（Safari）打开本应用，同时复制地址备用；规避 App 内嵌页快速连点丢触摸",
-        openInBrowserOpened: (u) => `已请求打开 ${u}（地址已复制）— Safari 提示“此连接非私人连接”时点“查看证书”→“访问此网站”`,
-        openInBrowserCopied: (u) => `未能自动打开浏览器 — 地址已复制：${u}，请在 Safari 地址栏长按粘贴访问`,
+        openInBrowserOpened: (u) => `已交给系统浏览器打开 ${u}（本页已切后台）— Safari 提示“此连接非私人连接”时点“查看证书”→“访问此网站”`,
+        openInBrowserCopied: (u) => `未能唤起浏览器（宿主没提供 JS 桥）— 地址已复制：${u}，请在 Safari 地址栏长按粘贴访问`,
+        openInBrowserIgnored: (u, d) => `请求已发出但本页仍在前台（${d}）— App 未把浏览器切上来，地址已复制：${u}，请切到 Safari 长按粘贴`,
         openInBrowserCopyFailed: (u) => `打开与复制都失败 — 请手动在 Safari 访问：${u}`,
     },
     en: {
@@ -196,8 +197,9 @@ const STRINGS = {
         openInBrowser: "External browser",
         openInBrowserBtn: "🌐 Open & copy",
         openInBrowserHint: "Open this app in the system browser (Safari) and copy the address as a fallback; avoids the in-app WebView dropping fast taps",
-        openInBrowserOpened: (u) => `Asked the browser to open ${u} (address copied) — if Safari warns "This connection is not private", tap "Show Certificate" → "Visit Website"`,
-        openInBrowserCopied: (u) => `Browser did not open — address copied: ${u}; paste it into the Safari address bar`,
+        openInBrowserOpened: (u) => `Handed ${u} to the system browser (this page went to the background) — if Safari warns "This connection is not private", tap "Show Certificate" → "Visit Website"`,
+        openInBrowserCopied: (u) => `Browser did not open (no host JS bridge) — address copied: ${u}; paste it into the Safari address bar`,
+        openInBrowserIgnored: (u, d) => `Request sent but this page stayed in the foreground (${d}) — the App did not bring a browser up; address copied: ${u}, paste it in Safari`,
         openInBrowserCopyFailed: (u) => `Could not open or copy — visit ${u} in Safari manually`,
     },
 };
@@ -2084,6 +2086,24 @@ if (openBrowserBtn) {
     openBrowserBtn.title = t.openInBrowserHint;
 }
 if (FN_APP && openBrowserRow) openBrowserRow.hidden = false;
+// openURL 到底有没有把浏览器带到前台，SDK 自己不证明：移动端分支走
+// callAppMethod("openSystemBrowser", url)，而它对“handler 没注册”也是静默 resolve
+// （dist 源码里 callAppMethod 开头 return null，d.ts 返回类型就是 Promise<unknown>）。
+// 0.1.37 实测“提示已请求打开但 Safari 没跳”就是这种。故用页面可见性收尾：系统
+// 浏览器接管后本页一定会转 hidden（比 blur 可靠，弹层/键盘也会 blur）。
+function waitHidden(ms) {
+    if (document.visibilityState === "hidden") return Promise.resolve(true);
+    return new Promise((resolve) => {
+        const done = (v) => {
+            clearTimeout(timer);
+            document.removeEventListener("visibilitychange", onVis);
+            resolve(v);
+        };
+        const onVis = () => { if (document.visibilityState === "hidden") done(true); };
+        const timer = setTimeout(() => done(false), ms);
+        document.addEventListener("visibilitychange", onVis);
+    });
+}
 openBrowserBtn?.addEventListener("click", async () => {
     const externalUrl =
         location.origin + PREFIX +
@@ -2101,16 +2121,53 @@ openBrowserBtn?.addEventListener("click", async () => {
         try { copied = document.execCommand("copy"); } catch {}
         ta.remove();
     }
+    let sdk = null;
+    let bridgeFailed = false;
     try {
+        const { TrimApp } = await import("@trimjs/web-app");
+        sdk = new TrimApp();
+    } catch {
+        bridgeFailed = true;
+    }
+    // isWeb / isStandaloneWeb 是在 init 的 Promise 执行器里同步赋值的，构完就能读；
+    // UA 里的 FNAppVer/x.y.z 决定 isWeb=false，跟页面是不是真在微应用宿主里无关。
+    const diag = sdk ? `isWeb=${sdk.isWeb}${sdk.isStandaloneWeb ? ",standalone" : ""}` : "sdk=none";
+    if (sdk) {
         // 手机（isWeb=false）走原生 openSystemBrowser，必须给完整绝对 URL；
         // PC（isWeb=true）走 window.open。这里传的已经是绝对地址。
-        const { TrimApp } = await import("@trimjs/web-app");
-        const sdk = new TrimApp();
-        await sdk.openURL(externalUrl, "_blank");
-        setBadge(t.openInBrowserOpened(externalUrl), "p2p");
-    } catch {
-        setBadge(copied ? t.openInBrowserCopied(externalUrl) : t.openInBrowserCopyFailed(externalUrl), "warn");
+        const call = sdk.openURL(externalUrl, "_blank");
+        call.catch(() => {}); // 超时后迟到的 reject 不能变成未处理异常
+        try {
+            // 桥不存在时 init 永不 resolve（Docker 版 type=url 直连容器端口、
+            // manifest 又没声明 micro_app 就是这个情况），openURL 首行 yield
+            // initPromise 会跟着永久挂死，故加 5 秒超时让失败可见。
+            await Promise.race([
+                call,
+                new Promise((_, reject) => setTimeout(() => reject(new Error("host bridge timeout")), 5000)),
+            ]);
+        } catch {
+            bridgeFailed = true;
+        }
+        if (!bridgeFailed && (await waitHidden(1500))) {
+            setBadge(t.openInBrowserOpened(externalUrl), "p2p");
+            return;
+        }
     }
+    // 兜底再试一次自己开新窗口：普通浏览器弹被拦截时 window.open 返回 null（可判定），
+    // App 内则多半被 InAppWebView 的 createWindow 吃掉，试一次不亏。
+    try { window.open(externalUrl, "_blank"); } catch {}
+    if (await waitHidden(1200)) {
+        setBadge(t.openInBrowserOpened(externalUrl), "p2p");
+        return;
+    }
+    setBadge(
+        !copied
+            ? t.openInBrowserCopyFailed(externalUrl)
+            : bridgeFailed
+                ? t.openInBrowserCopied(externalUrl)
+                : t.openInBrowserIgnored(externalUrl, diag),
+        "warn",
+    );
 });
 
 // clipboard sync: browser -> device on tab focus (permission permitting)

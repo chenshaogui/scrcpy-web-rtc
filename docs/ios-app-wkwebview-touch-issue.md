@@ -36,4 +36,21 @@
 - 0.1.10/0.1.11：pointermove rAF 帧合并、blur/visibilitychange 兜底释放卡住的手指、中文输入法 composition 处理。
 - 服务端：控制消息单条 FIFO 串行队列 + ≥12ms 节流（`MIN_CONTROL_GAP_MS`），消除 down/up 在共享 ADB 控制 socket 上乱序。（注：此节流对人手快连不触发，主要是顺序保证，非本次漏键的解。）
 
+## 请求 App 侧处理之二：绕道系统浏览器的 openURL 不生效（0.1.37/0.1.38 真机实测）
+为把页面从上述 WKWebView 搬到 Safari，我们按开放平台文档接了 JS SDK（`@trimjs/web-app`，manifest 已声明 `micro_app=true`）：
+```ts
+await new TrimApp().openURL("https://<fnOS 域名>/app/scrcpy-remote", "_blank");
+```
+实测：Promise 正常 resolve（说明请求确实发出去了），但系统浏览器没有被拉起，页面仍在前台。结合 SDK 源码判断是宿主侧 handler 未生效：
+- `openURL` 在移动端分支只做 `callAppMethod("openSystemBrowser", url)`；
+- `callAppMethod` 开头 `if (!this.flutterInAppWebView) return null;` —— 桥不存在时静默返回，不抛错；
+- `index.d.ts` 里 `openURL(...): Promise<unknown>`，成功与否没有回传信号，页面无法自查（我们改用 `document.visibilityState` 转 hidden 来间接判定）。
+
+请飞牛侧确认/处理：
+1. App 内嵌微应用的 WebView 是否注册了 `openSystemBrowser` handler（Flutter InAppWebView `callHandler` 名），未注册则文档所述“移动 WebView 宿主中会用系统浏览器打开 URL”实际不成立；
+2. 若已注册，是否对 URL 有域名/协议白名单限制（我们的地址是 fnOS 网关路径 `/app/<appname>`，含 FN Connect 中继 origin 与自建 DDNS 两种），被拦时请给可观测的错误回传；
+3. 建议 SDK 让 `openURL` 回传真实结果（成功/未实现/被策略拒绝），避免第三方页把“静默 no-op”误当成功。
+
+在此之前的可用路径：页面已把干净地址（`location.origin` + 网关前缀，不带 fnOS 网关注入的会话 token）复制进剪贴板，用户手动切到 Safari 粘贴即可；体验上差一次手动，但可用。
+
 > 诊断期加入的 🐛 事件日志面板、`dbg()` 埋点、全局触摸计数器、服务端 `ctrl-ack` 已于 0.1.23 全部移除，本文件仅保留结论备查。
