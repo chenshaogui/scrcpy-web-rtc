@@ -10,10 +10,17 @@ services:
     image: qychan/scrcpy-webrtc:latest
     container_name: scrcpy-remote-docker
     restart: unless-stopped
-    ports:
-      # Container listens on 8010 (Dockerfile PORT default). fnOS maps the
-      # manifest.service_port (8010) on the host straight to it.
-      - "${TRIM_SERVICE_PORT}:8010"
+    # Host networking: the container shares the NAS host's network stack, so it
+    # reaches redroid the same way the native (host-process) build does. Under
+    # the default bridge network, connecting to the NAS's OWN LAN IP
+    # (e.g. 192.168.3.113:5555, where redroid's adb is published) is a hairpin
+    # — the TCP handshake completes via docker-proxy but the ADB data path
+    # stalls and is reset after ~2.5 min (browser sees `read ECONNRESET`).
+    # Host mode sidesteps both hairpin and bridge MTU blackholes. PORT=8010
+    # below makes the app bind the host's 0.0.0.0:8010 directly, which is also
+    # what manifest.service_port (8010) + checkport expect, so the fnOS port
+    # entry keeps working without a `ports:` mapping.
+    network_mode: host
     environment:
       TZ: Asia/Shanghai
       HOST: 0.0.0.0
