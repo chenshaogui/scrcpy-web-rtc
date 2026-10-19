@@ -1171,7 +1171,11 @@ async function handleSession(ws, req) {
             });
             video.sizeChanged((size) => sendSignal({ type: "size", ...size }));
 
-            // audio pump: opus packets go P2P only (native <video> plays them)
+            // audio pump: once WebRTC is connected, opus rides the RTP track
+            // (iOS decodes it natively). Only before P2P comes up do we tag
+            // (0x02) opus frames onto the control WebSocket for the WS decoder —
+            // otherwise a WS-video session (hijack-prone WebView, or P2P failed
+            // without --turn) mirror pictures but stays silent.
             (async () => {
                 const meta = await current.audioStream;
                 if (meta?.type !== "success") {
@@ -1186,6 +1190,16 @@ async function handleSession(ws, req) {
                         try {
                             rtc.sendAudioPacket(packet);
                         } catch {}
+                    } else if (
+                        packet.type === "data" &&
+                        ws.readyState === ws.OPEN
+                    ) {
+                        const buf = new Uint8Array(HEADER + packet.data.length);
+                        const dv = new DataView(buf.buffer);
+                        buf[0] = 2;
+                        dv.setBigUint64(2, packet.pts ?? 0n);
+                        buf.set(packet.data, HEADER);
+                        ws.send(buf);
                     }
                 }
             })().catch((e) => log("audio pump error:", e.message));

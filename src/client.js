@@ -74,6 +74,7 @@ const STRINGS = {
         selectDevice: "选择设备…",
         device: "设备",
         connecting: "连接中…",
+        wsTimeout: "连接超时：信令 WebSocket 未建立 — 当前链路（如 FN Connect 中继）可能不支持 WebSocket，改用直连域名试试",
         error: (m) => `出错：${m}`,
         decodeError: (m) => `解码出错：${m}`,
         disconnected: "连接已断开",
@@ -107,6 +108,12 @@ const STRINGS = {
         deviceRemoved: "已删除",
         deviceDeleteFailed: (m) => `删除失败：${m}`,
         offlineTag: "离线",
+        openInBrowser: "外部浏览器",
+        openInBrowserBtn: "🌐 打开并复制",
+        openInBrowserHint: "用系统浏览器（Safari）打开本应用，同时复制地址备用；规避 App 内嵌页快速连点丢触摸",
+        openInBrowserOpened: (u) => `已请求打开 ${u}（地址已复制）— Safari 提示“此连接非私人连接”时点“查看证书”→“访问此网站”`,
+        openInBrowserCopied: (u) => `未能自动打开浏览器 — 地址已复制：${u}，请在 Safari 地址栏长按粘贴访问`,
+        openInBrowserCopyFailed: (u) => `打开与复制都失败 — 请手动在 Safari 访问：${u}`,
     },
     en: {
         refresh: "Refresh devices",
@@ -152,6 +159,7 @@ const STRINGS = {
         selectDevice: "Select device…",
         device: "Device",
         connecting: "Connecting…",
+        wsTimeout: "Signaling timeout: the WebSocket never opened — this link (e.g. the FN Connect relay) may not carry WebSockets; try a direct-access domain",
         error: (m) => `Error: ${m}`,
         decodeError: (m) => `Decode error: ${m}`,
         disconnected: "Disconnected",
@@ -185,6 +193,12 @@ const STRINGS = {
         deviceRemoved: "Removed",
         deviceDeleteFailed: (m) => `delete failed: ${m}`,
         offlineTag: "offline",
+        openInBrowser: "External browser",
+        openInBrowserBtn: "🌐 Open & copy",
+        openInBrowserHint: "Open this app in the system browser (Safari) and copy the address as a fallback; avoids the in-app WebView dropping fast taps",
+        openInBrowserOpened: (u) => `Asked the browser to open ${u} (address copied) — if Safari warns "This connection is not private", tap "Show Certificate" → "Visit Website"`,
+        openInBrowserCopied: (u) => `Browser did not open — address copied: ${u}; paste it into the Safari address bar`,
+        openInBrowserCopyFailed: (u) => `Could not open or copy — visit ${u} in Safari manually`,
     },
 };
 
@@ -342,6 +356,7 @@ for (const [id, key] of [
     ["label-recents", "recents"], ["label-kbd", "keyboard"], ["label-shell", "shell"],
     ["label-disconnect", "disconnectShort"],
     ["label-custom-options", "customOptions"], ["label-opt-extra", "optExtra"],
+    ["label-open-browser", "openInBrowser"],
 ]) $(id).textContent = t[key];
 $("opt-extra-add").textContent = t.optAdd;
 $("opt-apply").textContent = t.optApply;
@@ -460,6 +475,7 @@ if (SIGNAL) {
 }
 
 let ws = null;
+let wsTimer = null;
 let decoder = null;
 let writer = null;
 let canvas = null;
@@ -907,6 +923,7 @@ function disconnect() {
     teardownRtc();
     resetEncoderOptions();
     resetAudioEncoderOptions();
+    clearTimeout(wsTimer);
     ws?.close();
     ws = null;
     writer?.releaseLock();
@@ -955,7 +972,17 @@ function connect(serial) {
         ws = TOKEN ? new WebSocket(url, [`scrcpy-webrtc.token.${TOKEN}`]) : new WebSocket(url);
     }
     ws.binaryType = "arraybuffer";
+    // handshake watchdog: a relay/gateway that doesn't support the WebSocket
+    // upgrade swallows the request — the socket sits in CONNECTING forever
+    // and "连接中…" never resolves. Say so after 10 s instead.
+    clearTimeout(wsTimer);
+    wsTimer = setTimeout(() => {
+        if (ws && ws.readyState === WebSocket.CONNECTING) {
+            setBadge(t.wsTimeout, "error");
+        }
+    }, 10000);
     ws.onopen = () => {
+        clearTimeout(wsTimer);
         // negotiate WebRTC immediately, in parallel with scrcpy startup
         tryWebRtc();
         restoreSession(serial);
@@ -1056,6 +1083,7 @@ function connect(serial) {
         }
     };
     ws.onclose = (e) => {
+        clearTimeout(wsTimer);
         if (currentSerial !== serial) return;
         setBadge(e.code === 4001 ? t.unauthorizedHint : t.disconnected, "error");
         // the socket died on its own — reflect it in the sheet: drop the
@@ -2036,6 +2064,54 @@ async function adbConnect() {
 adbConnectBtn.onclick = adbConnect;
 adbHostInput.onkeydown = (e) => { if (e.key === "Enter") adbConnect(); };
 adbPortInput.onkeydown = (e) => { if (e.key === "Enter") adbConnect(); };
+
+// ── “外部浏览器”入口（飞牛移动 App 内嵌 WKWebView 吞快速连点，见
+// docs/ios-app-wkwebview-touch-issue.md）──
+// 一个按钮同时做两件事：① 复制地址（万一没跳成可手粘）② 调 openURL 唤起
+// 系统浏览器。地址用 location.origin + 网关前缀重建。
+// token 按部署环境分两种处理：
+//   • /app/<name> 前缀一定是 fnOS 统一网关（native fpk 与 docker fpk 都是），它
+//     往内嵌页 URL 里注入的是 fnOS 自己的会话 token。本应用服务端从未配 --token
+//     （VIEW_NEEDS_TOKEN=false）不需要它；而把它拼到别的域名（自建 DDNS）会被
+//     fnOS 网关拒为 invalid token（0.1.35 实测），所以这里必须剔掉。
+//   • 其他前缀是普通 Docker/VPS 部署，用户经常用 --token 保护页面，而 Safari 是
+//     独立上下文读不到 localStorage，地址不带 token 就会直接 401，所以要带上。
+const FN_APP = /fnOS|fnClient|feiniu|fnnas/i.test(navigator.userAgent || "");
+const openBrowserRow = $("row-open-browser");
+const openBrowserBtn = $("btn-open-browser");
+if (openBrowserBtn) {
+    openBrowserBtn.textContent = t.openInBrowserBtn;
+    openBrowserBtn.title = t.openInBrowserHint;
+}
+if (FN_APP && openBrowserRow) openBrowserRow.hidden = false;
+openBrowserBtn?.addEventListener("click", async () => {
+    const externalUrl =
+        location.origin + PREFIX +
+        (!PREFIX.startsWith("/app/") && TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "");
+    let copied = false;
+    try {
+        await navigator.clipboard.writeText(externalUrl);
+        copied = true;
+    } catch {
+        const ta = document.createElement("textarea");
+        ta.value = externalUrl;
+        ta.style.cssText = "position:fixed;opacity:0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { copied = document.execCommand("copy"); } catch {}
+        ta.remove();
+    }
+    try {
+        // 手机（isWeb=false）走原生 openSystemBrowser，必须给完整绝对 URL；
+        // PC（isWeb=true）走 window.open。这里传的已经是绝对地址。
+        const { TrimApp } = await import("@trimjs/web-app");
+        const sdk = new TrimApp();
+        await sdk.openURL(externalUrl, "_blank");
+        setBadge(t.openInBrowserOpened(externalUrl), "p2p");
+    } catch {
+        setBadge(copied ? t.openInBrowserCopied(externalUrl) : t.openInBrowserCopyFailed(externalUrl), "warn");
+    }
+});
 
 // clipboard sync: browser -> device on tab focus (permission permitting)
 window.addEventListener("focus", async () => {
