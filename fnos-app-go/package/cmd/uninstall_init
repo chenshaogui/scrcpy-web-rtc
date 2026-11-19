@@ -1,0 +1,9 @@
+#!/bin/bash
+# Uninstall pre-hook (Go): stop the app. User data is left for fnOS to manage.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -x "${APP_DIR}/cmd/main" ]; then
+    "${APP_DIR}/cmd/main" stop || true
+fi
+exit 0

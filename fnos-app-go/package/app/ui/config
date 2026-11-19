@@ -1,0 +1,14 @@
+{
+  ".url": {
+    "scrcpy-remote-go.main": {
+      "title": "云手机助手(Go)",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/scrcpy-remote-go",
+      "gatewaySocket": "app.sock",
+      "url": "/app/scrcpy-remote-go",
+      "allUsers": true
+    }
+  }
+}

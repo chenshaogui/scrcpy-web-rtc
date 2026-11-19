@@ -1,0 +1,7 @@
+# fnOS lifecycle scripts run inside Linux; CRLF breaks the #!/bin/bash shebang.
+package/cmd/* text eol=lf
+scripts/*.mjs text eol=lf
+scripts/*.py text eol=lf
+package/manifest text eol=lf
+package/app/ui/config text eol=lf
+package/config/* text eol=lf

@@ -1,0 +1,4 @@
+#!/bin/bash
+# Uninstall post-hook (Go): nothing extra. Required: must exit 0.
+set -u
+exit 0

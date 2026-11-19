@@ -1,0 +1,9 @@
+#!/bin/bash
+# Upgrade pre-hook (Go): stop the running app so files can be replaced.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -x "${APP_DIR}/cmd/main" ]; then
+    "${APP_DIR}/cmd/main" stop || true
+fi
+exit 0

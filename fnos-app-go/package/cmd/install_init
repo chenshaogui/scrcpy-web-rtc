@@ -1,0 +1,4 @@
+#!/bin/bash
+# Install pre-hook (Go): nothing to pre-stage. Required: must exit 0.
+set -u
+exit 0

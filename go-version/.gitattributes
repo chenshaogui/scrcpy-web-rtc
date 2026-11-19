@@ -1,0 +1,6 @@
+# Go sources are line-ending agnostic, but keep them LF for consistency with
+# the Linux cross-build and to avoid CRLF warnings on Windows checkouts.
+*.go text eol=lf
+*.mjs text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf

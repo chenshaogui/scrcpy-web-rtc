@@ -1,0 +1,4 @@
+#!/bin/bash
+# Upgrade post-hook (Go): fnOS re-starts the app via cmd/main start. Nothing to do.
+set -u
+exit 0

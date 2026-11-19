@@ -1,0 +1,4 @@
+#!/bin/bash
+# Config-change pre-hook (Go): no validation needed. Required: must exit 0.
+set -u
+exit 0

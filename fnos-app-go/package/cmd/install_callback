@@ -1,0 +1,4 @@
+#!/bin/bash
+# Install post-hook (Go): fnOS starts the app via cmd/main start. Nothing extra.
+set -u
+exit 0
