@@ -66,28 +66,31 @@ type Session struct {
 
 	store *adb.DeviceStore
 
-	mu           sync.Mutex
-	rtc          *rtc.Session
-	rtcGen       uint32
-	control      *adb.Socket
-	streams      *scrcpy.Streams // current scrcpy streams, closed on teardown
-	transport    *adb.Transport  // current ADB transport, closed on teardown
-	videoW       uint16
-	videoH       uint16
-	videoPath    string // "ws" or "rtc"
-	rtcVideo     bool
-	preset       string
-	autoQuality  bool
-	custom       map[string]interface{}
-	videoEncoder string
-	audioEncoder string
-	audioCodec    string
-	audioBroken   bool
-	audioOffTried bool  // already restarted once with audio off (no restart loop)
-	lastConfig    []byte // last H.264 config (SPS/PPS), replayed to fresh RTC peers
-	restartWanted bool  // a restart was requested mid-stream; loop re-runs scrcpy
-	replaced      bool
-	closed        bool
+	mu              sync.Mutex
+	rtc             *rtc.Session
+	rtcGen          uint32
+	control         *adb.Socket
+	streams         *scrcpy.Streams // current scrcpy streams, closed on teardown
+	transport       *adb.Transport  // current ADB transport, closed on teardown
+	videoW          uint16
+	videoH          uint16
+	videoPath       string // "ws" or "rtc"
+	rtcVideo        bool
+	preset          string
+	autoQuality     bool
+	custom          map[string]interface{}
+	videoEncoder    string
+	audioEncoder    string
+	audioCodec      string
+	audioBroken     bool
+	audioOffTried   bool   // already restarted once with audio off (no restart loop)
+	lastConfig      []byte // last H.264 config (SPS/PPS), replayed to fresh RTC peers
+	lastKeyframe    []byte // last IDR access unit, replayed when WebRTC connects late
+	lastKeyframePTS uint64
+	streamReady     bool // first scrcpy stream reached meta; restore messages before this only seed config
+	restartWanted   bool // a restart was requested mid-stream; loop re-runs scrcpy
+	replaced        bool
+	closed          bool
 
 	controlMu      sync.Mutex
 	lastControlAt  time.Time
@@ -461,11 +464,6 @@ func (s *Session) runOneStream(dial func() (*adb.Transport, error)) (bool, error
 			// what flips audioBroken for the next attempt.
 			go s.pumpServerOutput(streams.ServerOut)
 			videoMeta, err = s.readVideoMetaBounded(streams)
-			if err != nil {
-				s.log("META-DIAG: video socket read failed: %v (SCID=%s, audio=%v)", err, streams.SCID, opts.Audio != nil && *opts.Audio)
-			} else {
-				s.log("META-DIAG: video meta codec=%d %dx%d", videoMeta.Codec, videoMeta.Width, videoMeta.Height)
-			}
 		}
 		if err == nil {
 			break
@@ -527,6 +525,7 @@ func (s *Session) runOneStream(dial func() (*adb.Transport, error)) (bool, error
 	s.mu.Lock()
 	s.videoW = uint16(videoMeta.Width)
 	s.videoH = uint16(videoMeta.Height)
+	s.streamReady = true
 	s.mu.Unlock()
 
 	// Send meta to the viewer.
@@ -587,6 +586,14 @@ func (s *Session) sendVideoPacket(pkt *scrcpy.MediaPacket) {
 		// frame can still get a decodable keyframe (server.mjs's lastConfig).
 		s.mu.Lock()
 		s.lastConfig = append([]byte(nil), pkt.Data...)
+		s.mu.Unlock()
+	} else if pkt.Keyframe {
+		// Pion drops writes made before the DTLS transport is up. The first
+		// config+IDR therefore never reaches a late-joining browser; keep the
+		// newest IDR so OnKeyframeRequest can replay it once connected.
+		s.mu.Lock()
+		s.lastKeyframe = append([]byte(nil), pkt.Data...)
+		s.lastKeyframePTS = pkt.PTS
 		s.mu.Unlock()
 	}
 	s.mu.Lock()

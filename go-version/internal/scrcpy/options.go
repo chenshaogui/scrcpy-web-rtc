@@ -18,6 +18,7 @@ const (
 // pointer means "use the device default" (option omitted from the command line).
 type Options struct {
 	SCID                string
+	ServerVersion       string // empty means Version (3.1); override for diagnostics
 	LogLevel            string
 	MaxSize             *int
 	MaxFps              *int
@@ -182,9 +183,13 @@ func (o Options) Serialize() []string {
 
 // StartCommand returns the full argv passed to adb `exec:`.
 func (o Options) StartCommand() string {
+	version := o.ServerVersion
+	if version == "" {
+		version = Version
+	}
 	parts := []string{
 		"CLASSPATH=" + ServerPath,
-		"app_process", "/", ServerClass, Version,
+		"app_process", "/", ServerClass, version,
 	}
 	parts = append(parts, o.Serialize()...)
 	return strings.Join(parts, " ")

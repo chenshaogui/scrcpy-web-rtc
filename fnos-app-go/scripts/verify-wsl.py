@@ -8,11 +8,11 @@ env.update({
     "TRIM_PKGVAR": D + "/var",
     "GATEWAY_SOCKET": D + "/app.sock",
     "GATEWAY_PREFIX": "/app/scrcpy-remote-go",
-    "GATEWAY_TARGET": "http://127.0.0.1:18011",
+    "GATEWAY_TARGET": "http://127.0.0.1:18012",
     "WEB_DIR": D + "/web",
 })
 
-srv = subprocess.Popen([D + "/srv", "--port", "18011", "--no-page", "--no-signal", "--no-qr"],
+srv = subprocess.Popen([D + "/srv", "--port", "18012", "--no-page", "--no-signal", "--no-qr"],
                        stdout=open(D + "/srv.log", "w"), stderr=subprocess.STDOUT, env=env)
 time.sleep(2)
 gw = subprocess.Popen([D + "/gw"], stdout=open(D + "/gw.log", "w"), stderr=subprocess.STDOUT, env=env)
@@ -24,7 +24,7 @@ def probe(label, fn):
     except Exception as e:
         print(label, "FAILED:", e)
 
-probe("server /api/devices", lambda: urllib.request.urlopen("http://127.0.0.1:18011/api/devices", timeout=3).read().decode())
+probe("server /api/devices", lambda: urllib.request.urlopen("http://127.0.0.1:18012/api/devices", timeout=3).read().decode())
 
 # HTTP over unix socket via raw request
 def unix_get(path):

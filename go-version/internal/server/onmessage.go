@@ -96,7 +96,7 @@ func (s *Session) startRTC() {
 		},
 		OnControl:         func(m map[string]interface{}) { s.handleControl(m) },
 		OnShell:           func(m map[string]interface{}) { s.handleShell(m) },
-		OnKeyframeRequest: func() { s.requestKeyframe() },
+		OnKeyframeRequest: func() { s.onKeyframeRequest() },
 		OnBitrateEstimate: func(bps int) { s.onBitrateEstimate(bps) },
 		Log:               s.log,
 	}
@@ -127,6 +127,29 @@ func (s *Session) startRTC() {
 	}
 }
 
+// onKeyframeRequest runs when the Pion peer first reaches "connected". Any
+// packets written before DTLS came up were dropped by Pion, including the
+// scrcpy config and first IDR. Replay the cached IDR immediately so the browser
+// has something decodable, then ask the device for a fresh one as well.
+func (s *Session) onKeyframeRequest() {
+	s.mu.Lock()
+	rtcSession := s.rtc
+	cfg := append([]byte(nil), s.lastConfig...)
+	kf := append([]byte(nil), s.lastKeyframe...)
+	pts := s.lastKeyframePTS
+	s.mu.Unlock()
+	if rtcSession != nil && len(kf) > 0 {
+		func() {
+			defer func() { _ = recover() }()
+			if len(cfg) > 0 {
+				rtcSession.SendVideoPacket(true, false, 0, cfg)
+			}
+			rtcSession.SendVideoPacket(false, true, pts, kf)
+		}()
+	}
+	s.requestKeyframe()
+}
+
 func (s *Session) closedFlag() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,9 +177,10 @@ func (s *Session) handleQuality(msg map[string]interface{}) {
 		s.autoQuality = false
 		changed := preset != s.preset
 		s.preset = preset
+		ready := s.streamReady
 		s.mu.Unlock()
 		s.log("quality preset -> %s", preset)
-		if changed {
+		if changed && ready {
 			s.requestRestart()
 		}
 		return
@@ -174,10 +198,14 @@ func (s *Session) handleOptions(msg map[string]interface{}) {
 	before, _ := json.Marshal(s.custom)
 	after, _ := json.Marshal(clean)
 	s.custom = clean
+	changed := string(before) != string(after)
+	ready := s.streamReady
 	s.mu.Unlock()
-	if string(before) != string(after) {
+	if changed {
 		s.log("custom options -> %s", string(after))
-		s.requestRestart()
+		if ready {
+			s.requestRestart()
+		}
 	}
 }
 
@@ -237,6 +265,7 @@ func (s *Session) handleEncoder(msg map[string]interface{}, audio bool) {
 	}
 	name, _ := msg["name"].(string)
 	s.mu.Lock()
+	changed := false
 	if audio {
 		codec, _ := msg["codec"].(string)
 		if codec == "" {
@@ -245,15 +274,20 @@ func (s *Session) handleEncoder(msg map[string]interface{}, audio bool) {
 		if codec == "" {
 			codec = "opus"
 		}
+		changed = name != s.audioEncoder || codec != s.audioCodec
 		s.audioEncoder = name
 		s.audioCodec = codec
 		s.sendSignalLocked(map[string]interface{}{"type": "audio-encoder", "name": name, "codec": codec})
 	} else {
+		changed = name != s.videoEncoder
 		s.videoEncoder = name
 		s.sendSignalLocked(map[string]interface{}{"type": "encoder", "name": name})
 	}
+	ready := s.streamReady
 	s.mu.Unlock()
-	s.requestRestart()
+	if changed && ready {
+		s.requestRestart()
+	}
 }
 
 func (s *Session) sendSignalLocked(v interface{}) {

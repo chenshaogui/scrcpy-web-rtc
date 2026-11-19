@@ -10,7 +10,7 @@
 # Unlike the native (Node) package there is NO nodejs_v22 dependency: the
 # server and the gateway are self-contained static Go binaries shipped in
 # app/. Two processes are started:
-#   1. scrcpy-webrtc server  -> 127.0.0.1:18011 (HTTP + WS API, scrcpy, WebRTC)
+#   1. scrcpy-webrtc server  -> 127.0.0.1:18012 (HTTP + WS API, scrcpy, WebRTC)
 #   2. gateway              -> unix socket app.sock, forwards /api/* to the
 #                              server and serves the inlined page from web/
 #
@@ -26,7 +26,7 @@ SERVER_PID_FILE="${VAR_DIR}/server.pid"
 GATEWAY_PID_FILE="${VAR_DIR}/gateway.pid"
 GATEWAY_SOCKET_FILE="${APP_DIR}/app.sock"
 GATEWAY_PREFIX="/app/scrcpy-remote-go"
-INNER_PORT=18011
+INNER_PORT=18012
 
 mkdir -p "$VAR_DIR" 2>/dev/null || true
 
@@ -97,7 +97,7 @@ start() {
     rm -f "$GATEWAY_SOCKET_FILE" 2>/dev/null || true
     cd "$APP_ROOT" || fail "cannot cd to $APP_ROOT"
 
-    # 1. Go server: local HTTP/WS API on 127.0.0.1:18011. No page/signal/QR:
+    # 1. Go server: local HTTP/WS API on 127.0.0.1:18012. No page/signal/QR:
     #    the page is served by the gateway, and fnOS is an intranet install.
     log "starting Go server (port ${INNER_PORT})"
     nohup ./scrcpy-webrtc \

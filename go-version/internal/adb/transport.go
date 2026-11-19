@@ -232,10 +232,29 @@ func (t *Transport) handlePacket(pkt Packet) {
 		}
 		localID := t.allocID()
 		s := newSocket(t, localID, pkt.Arg0)
+		// A reverse socket is already open from our side once we send OKAY.
+		// Grant the initial one-packet write window (same state that ack(0)
+		// gives a forward socket) and mark it opened, otherwise the first
+		// control WRITE waits forever for credits and touches never reach adbd.
+		s.writeMu.Lock()
+		s.credits = -1
+		s.writeMu.Unlock()
+		s.opened.Store(true)
+		close(s.openCh)
+		// Register the socket before sending OKAY. The device can send WRTE
+		// immediately after seeing OKAY, and CmdWrite/CmdClose are routed by
+		// looking up t.sockets[pkt.Arg1] (our local id). Without this entry all
+		// reverse-tunnel payloads — including scrcpy's video meta — are dropped.
+		t.mu.Lock()
+		t.sockets[localID] = s
+		t.mu.Unlock()
 		select {
 		case ch <- s:
 			_ = t.sendPacket(Packet{Command: CmdOkay, Arg0: localID, Arg1: pkt.Arg0})
 		default:
+			t.mu.Lock()
+			delete(t.sockets, localID)
+			t.mu.Unlock()
 			_ = t.sendPacket(Packet{Command: CmdClose, Arg1: pkt.Arg0})
 		}
 	case CmdOkay:

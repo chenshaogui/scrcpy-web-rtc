@@ -21,7 +21,7 @@
 ## 与现有版本共存
 
 - 应用名 `scrcpy-remote-go`、桌面入口「云手机助手(Go)」，与 native 版（`scrcpy-remote`）和 Docker 版完全独立，可同时安装。
-- 网关路径前缀 `/app/scrcpy-remote-go`，内部端口 `18011`，数据目录由 fnOS 的 `TRIM_PKGVAR` 管理（adb 密钥 `adbkey` 与设备列表 `devices.json` 持久化在此，重装后仍保留信任）。
+- 网关路径前缀 `/app/scrcpy-remote-go`，内部端口 `18012`，数据目录由 fnOS 的 `TRIM_PKGVAR` 管理（adb 密钥 `adbkey` 与设备列表 `devices.json` 持久化在此，重装后仍保留信任）。
 - 不声明 `install_dep_apps`，因此**不需要**先安装官方 `nodejs_v22` 应用。
 
 ## 包内结构
@@ -32,7 +32,7 @@ cmd/main                  启停脚本：Go server + Go gateway
 config/{privilege,resource}
 app/
   scrcpy-webrtc            Go 主服务（ELF，交叉编译）
-  gateway                  Go 网关代理（unix socket -> 18011 + 静态页）
+  gateway                  Go 网关代理（unix socket -> 18012 + 静态页）
   server.bin               scrcpy-server v3.1
   web/index.html           内联前端（含 app.js）
   ui/config + ui/images/   桌面入口与图标
@@ -46,7 +46,7 @@ app/
 fnOS 统一网关 (unix socket app.sock)
         │  (Go gateway: 路径重写 /app/scrcpy-remote-go/* -> /*)
         ▼
-Go gateway ──转发 /api/*──▶ Go server (127.0.0.1:18011)
+Go gateway ──转发 /api/*──▶ Go server (127.0.0.1:18012)
         │                       │
         └─serve index.html      ├─ ADB over TCP (直连 adbd)
                                 ├─ scrcpy v3.1 (H.264/Opus)
