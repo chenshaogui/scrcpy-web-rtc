@@ -630,6 +630,18 @@ func (s *Session) sendVideoPacket(pkt *scrcpy.MediaPacket) {
 }
 
 func (s *Session) pumpAudio(sock *adb.Socket) {
+	codec, err := scrcpy.ReadAudioCodec(sock)
+	if err != nil {
+		s.log("audio stream header: %v", err)
+		return
+	}
+	s.log("audio stream codec=%s (0x%08x)", scrcpy.AudioCodecName(codec), codec)
+	if codec != scrcpy.AudioOpus {
+		s.log("audio stream codec %s is unsupported; WebRTC playback requires opus",
+			scrcpy.AudioCodecName(codec))
+		return
+	}
+
 	reader := scrcpy.NewMediaReader(sock)
 	for {
 		select {
@@ -639,6 +651,9 @@ func (s *Session) pumpAudio(sock *adb.Socket) {
 		}
 		pkt, err := reader.Next()
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				s.log("audio stream read error: %v", err)
+			}
 			return
 		}
 		s.mu.Lock()

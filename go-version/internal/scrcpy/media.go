@@ -3,6 +3,7 @@ package scrcpy
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -78,6 +79,29 @@ func CodecName(id uint32) string {
 		return "h265"
 	case CodecAV1:
 		return "av1"
+	default:
+		return "unknown"
+	}
+}
+
+func ReadAudioCodec(r io.Reader) (uint32, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return 0, fmt.Errorf("scrcpy: read audio codec metadata: %w", err)
+	}
+	return binary.BigEndian.Uint32(hdr[:]), nil
+}
+
+func AudioCodecName(id uint32) string {
+	switch id {
+	case AudioOpus:
+		return "opus"
+	case AudioAAC:
+		return "aac"
+	case AudioFLAC:
+		return "flac"
+	case AudioRaw:
+		return "raw"
 	default:
 		return "unknown"
 	}
