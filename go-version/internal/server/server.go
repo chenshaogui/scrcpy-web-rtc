@@ -90,7 +90,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/", s.handleStatic)
 
-	srv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", s.cfg.Port), Handler: mux}
+	host := s.cfg.Host
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	srv := &http.Server{Addr: fmt.Sprintf("%s:%d", host, s.cfg.Port), Handler: mux}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

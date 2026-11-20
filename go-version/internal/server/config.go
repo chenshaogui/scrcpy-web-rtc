@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	Host           string
 	Port           int
 	ADBDirect      bool
 	VideoEncoder   string
@@ -66,6 +67,7 @@ func hasArg(name string) bool {
 // scrcpy server jar (loaded by the caller).
 func Parse(serverBin []byte, publicDir string) (*Config, error) {
 	fs := flag.NewFlagSet("scrcpy-webrtc", flag.ContinueOnError)
+	host := fs.String("host", env("HOST", "0.0.0.0"), "HTTP/WebSocket listen host")
 	port := fs.Int("port", atoi(env("PORT", "8010")), "HTTP/WebSocket listen port")
 	videoEncoder := fs.String("video-encoder", env("VIDEO_ENCODER", ""), "pin video encoder")
 	audioEncoder := fs.String("audio-encoder", env("AUDIO_ENCODER", ""), "pin audio encoder")
@@ -118,6 +120,7 @@ func Parse(serverBin []byte, publicDir string) (*Config, error) {
 	}
 
 	return &Config{
+		Host:           *host,
 		Port:           *port,
 		ADBDirect:      truthy(env("ADB_DIRECT", "")) || hasArg("--direct-adb"),
 		VideoEncoder:   *videoEncoder,

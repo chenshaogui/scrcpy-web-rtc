@@ -33,7 +33,9 @@ func loadServerBin(exeDir string) []byte {
 
 func publicDir(exeDir string) string {
 	for _, p := range []string{
+		filepath.Join(exeDir, "web"),
 		filepath.Join(exeDir, "public"),
+		"web",
 		"public",
 		filepath.Join("..", "..", "public"),
 	} {
@@ -69,7 +71,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("scrcpy-webrtc (Go) listening on http://0.0.0.0:%d (scrcpy server v3.1)\n", cfg.Port)
+	fmt.Printf("scrcpy-webrtc (Go) listening on http://%s:%d (scrcpy server v3.1)\n", cfg.Host, cfg.Port)
 	if cfg.Token != "" {
 		fmt.Printf("  local: http://localhost:%d/?token=%s\n", cfg.Port, cfg.Token)
 	} else {
