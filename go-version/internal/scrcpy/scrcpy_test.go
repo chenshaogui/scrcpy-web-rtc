@@ -50,6 +50,26 @@ func TestInjectKeyCodeLayout(t *testing.T) {
 	}
 }
 
+func TestInjectPowerKeyLayout(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action uint32
+	}{
+		{name: "down", action: 0},
+		{name: "up", action: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := InjectKeyCode(tc.action, 26, 0, 0)
+			if got := binary.BigEndian.Uint32(data[2:6]); got != 26 {
+				t.Fatalf("keyCode = %d, want KEYCODE_POWER (26)", got)
+			}
+			if got := uint32(data[1]); got != tc.action {
+				t.Fatalf("action = %d, want %d", got, tc.action)
+			}
+		})
+	}
+}
+
 func TestInjectTextLayout(t *testing.T) {
 	data := InjectText("abc")
 	// type(1) + len(4) + 3 bytes

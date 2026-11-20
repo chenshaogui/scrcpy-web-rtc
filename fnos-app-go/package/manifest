@@ -1,5 +1,5 @@
 appname=scrcpy-remote-go
-version=0.1.28
+version=0.1.29
 display_name=云手机助手(Go)
 desc=通过 WebRTC 在飞牛桌面上镜像和控制 Android 设备。纯 Go 实现，无需 Node.js 运行时；支持 redroid 等无线 adb 设备，界面上可直接 adb connect。
 source=thirdparty

@@ -199,6 +199,32 @@ func (s *Session) inject(data []byte) {
 	_, _ = c.Write(data)
 }
 
+func (s *Session) lockDevice() {
+	s.mu.Lock()
+	c := s.control
+	s.mu.Unlock()
+	if c == nil {
+		return
+	}
+
+	for _, action := range []uint32{0, 1} {
+		data := scrcpy.InjectKeyCode(action, 26, 0, 0)
+		n, err := c.Write(data)
+		if err != nil {
+			s.log("lock device: power key action=%d: %v", action, err)
+			return
+		}
+		if n != len(data) {
+			s.log("lock device: power key action=%d wrote %d/%d bytes", action, n, len(data))
+			return
+		}
+		if action == 0 {
+			time.Sleep(12 * time.Millisecond)
+		}
+	}
+	s.log("device locked on session close")
+}
+
 // close tears everything down and locks the device when appropriate.
 func (s *Session) close() {
 	s.mu.Lock()
@@ -211,6 +237,25 @@ func (s *Session) close() {
 	transport := s.transport
 	rtcSession := s.rtc
 	s.mu.Unlock()
+
+	// Send KEYCODE_POWER while the control socket and transport are still
+	// alive. The viewer may already be gone, so do not depend on a final
+	// browser-side control message arriving before WebSocket teardown.
+	lockDone := make(chan struct{})
+	go func() {
+		s.lockDevice()
+		close(lockDone)
+	}()
+	lockTimedOut := false
+	select {
+	case <-lockDone:
+	case <-time.After(750 * time.Millisecond):
+		lockTimedOut = true
+		s.log("lock device: timed out waiting for power key injection")
+		if transport != nil {
+			_ = transport.Close()
+		}
+	}
 	close(s.done)
 
 	// Release the device FIRST: closing the scrcpy streams unblocks any
@@ -222,6 +267,9 @@ func (s *Session) close() {
 	}
 	if transport != nil {
 		_ = transport.Close()
+	}
+	if lockTimedOut {
+		<-lockDone
 	}
 	s.srv.unregisterSession(s.serial, s)
 	s.conn.Close(1000, "")
