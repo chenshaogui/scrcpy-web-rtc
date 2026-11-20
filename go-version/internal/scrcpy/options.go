@@ -4,6 +4,7 @@ package scrcpy
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -13,6 +14,43 @@ const (
 	ServerPath  = "/data/local/tmp/scrcpy-webrtc-server.jar"
 	ServerClass = "com.genymobile.scrcpy.Server"
 )
+
+var encoderLinePattern = regexp.MustCompile(
+	`^\s+--(video|audio)-codec=(\S+)\s+--(video|audio)-encoder=(\S+)(?:\s*\((sw|hw|hybrid)\))?(?:\s*(\[vendor\]))?(?:\s*\(alias for (\S+)\))?$`,
+)
+
+type Encoder struct {
+	Type         string `json:"type"`
+	Name         string `json:"name"`
+	Codec        string `json:"codec,omitempty"`
+	HardwareType string `json:"hardwareType,omitempty"`
+	Vendor       bool   `json:"vendor,omitempty"`
+	AliasFor     string `json:"aliasFor,omitempty"`
+}
+
+func ParseEncoderLine(line string) (Encoder, bool) {
+	m := encoderLinePattern.FindStringSubmatch(line)
+	if m == nil || m[1] != m[3] {
+		return Encoder{}, false
+	}
+	hardwareType := ""
+	switch m[5] {
+	case "sw":
+		hardwareType = "software"
+	case "hw":
+		hardwareType = "hardware"
+	case "hybrid":
+		hardwareType = "hybrid"
+	}
+	return Encoder{
+		Type:         m[1],
+		Codec:        m[2],
+		Name:         m[4],
+		HardwareType: hardwareType,
+		Vendor:       m[6] != "",
+		AliasFor:     m[7],
+	}, true
+}
 
 // Options mirrors the subset of AdbScrcpyOptions3_1 the app exposes. A nil
 // pointer means "use the device default" (option omitted from the command line).

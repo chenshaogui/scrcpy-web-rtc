@@ -110,6 +110,56 @@ func TestOptionsSerializeOmitsDefaults(t *testing.T) {
 	}
 }
 
+func TestOptionsSerializeListEncoders(t *testing.T) {
+	audio, control, list := false, false, true
+	args := (Options{
+		Audio:        &audio,
+		Control:      &control,
+		ListEncoders: &list,
+	}).Serialize()
+	for _, want := range []string{"audio=false", "control=false", "list_encoders=true"} {
+		if !contains(args, want) {
+			t.Errorf("missing %q in %v", want, args)
+		}
+	}
+}
+
+func TestParseEncoderLine(t *testing.T) {
+	tests := []struct {
+		line string
+		want Encoder
+		ok   bool
+	}{
+		{
+			line: "    --video-codec=h264 --video-encoder=c2.android.avc.encoder (sw)",
+			want: Encoder{Type: "video", Codec: "h264", Name: "c2.android.avc.encoder", HardwareType: "software"},
+			ok:   true,
+		},
+		{
+			line: "    --audio-codec=opus --audio-encoder=c2.android.opus.encoder (hw) [vendor] (alias for c2.android.opus)",
+			want: Encoder{Type: "audio", Codec: "opus", Name: "c2.android.opus.encoder", HardwareType: "hardware", Vendor: true, AliasFor: "c2.android.opus"},
+			ok:   true,
+		},
+		{
+			line: "    --video-codec=h264 --video-encoder=OMX.example.encoder",
+			want: Encoder{Type: "video", Codec: "h264", Name: "OMX.example.encoder"},
+			ok:   true,
+		},
+		{line: "not an encoder line", ok: false},
+		{line: "    --video-codec=h264 --audio-encoder=wrong-type", ok: false},
+	}
+	for _, tt := range tests {
+		got, ok := ParseEncoderLine(tt.line)
+		if ok != tt.ok {
+			t.Errorf("ParseEncoderLine(%q) ok=%v, want %v", tt.line, ok, tt.ok)
+			continue
+		}
+		if ok && got != tt.want {
+			t.Errorf("ParseEncoderLine(%q) = %+v, want %+v", tt.line, got, tt.want)
+		}
+	}
+}
+
 func TestMediaPacketParsing(t *testing.T) {
 	// Build a stream with a config packet (bit63) and a keyframe data packet (bit62).
 	var buf bytes.Buffer

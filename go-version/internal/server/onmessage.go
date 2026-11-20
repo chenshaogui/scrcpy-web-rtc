@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tiann/scrcpy-webrtc-go/internal/adb"
 	"github.com/tiann/scrcpy-webrtc-go/internal/rtc"
 	"github.com/tiann/scrcpy-webrtc-go/internal/scrcpy"
 )
@@ -261,7 +262,8 @@ func sanitizeOptions(in map[string]interface{}) map[string]interface{} {
 
 func (s *Session) handleEncoder(msg map[string]interface{}, audio bool) {
 	if list, _ := msg["list"].(bool); list {
-		return // encoder probing not implemented in this focused port
+		s.requestEncoders()
+		return
 	}
 	name, _ := msg["name"].(string)
 	s.mu.Lock()
@@ -288,6 +290,75 @@ func (s *Session) handleEncoder(msg map[string]interface{}, audio bool) {
 	if changed && ready {
 		s.requestRestart()
 	}
+}
+
+func (s *Session) requestEncoders() {
+	s.mu.Lock()
+	if s.encodersReady {
+		payload := s.encoderPayloadLocked()
+		s.mu.Unlock()
+		s.sendSignal(payload)
+		return
+	}
+	if s.encoderProbe {
+		s.mu.Unlock()
+		return
+	}
+	s.encoderProbe = true
+	transport := s.transport
+	s.mu.Unlock()
+
+	if transport == nil {
+		s.mu.Lock()
+		s.encoderProbe = false
+		s.mu.Unlock()
+		s.sendSignal(map[string]interface{}{
+			"type": "encoders", "list": []scrcpy.Encoder{}, "error": "device stream is not ready",
+		})
+		return
+	}
+
+	go func() {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-s.done:
+			return
+		}
+		list, err := s.probeEncoders(transport)
+		s.mu.Lock()
+		s.encoderProbe = false
+		if err == nil {
+			s.encoders = list
+			s.encodersReady = true
+		}
+		payload := s.encoderPayloadLocked()
+		s.mu.Unlock()
+		if err != nil {
+			s.log("encoder probe failed: %v", err)
+			payload["error"] = err.Error()
+		} else {
+			s.log("device reports %d encoder(s)", len(list))
+		}
+		s.sendSignal(payload)
+	}()
+}
+
+func (s *Session) encoderPayloadLocked() map[string]interface{} {
+	list := append([]scrcpy.Encoder(nil), s.encoders...)
+	if list == nil {
+		list = []scrcpy.Encoder{}
+	}
+	return map[string]interface{}{
+		"type": "encoders", "list": list,
+		"current": s.videoEncoder, "currentAudio": s.audioEncoder,
+	}
+}
+
+func (s *Session) probeEncoders(transport *adb.Transport) ([]scrcpy.Encoder, error) {
+	if s.closedFlag() {
+		return nil, errDisconnected
+	}
+	return scrcpy.ListEncoders(transport, s.srv.cfg.ServerBin)
 }
 
 func (s *Session) sendSignalLocked(v interface{}) {

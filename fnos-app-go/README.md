@@ -66,6 +66,10 @@ node scripts/build-fpk.mjs --only arm64 # 只打 arm
 
 前置条件：仓库根目录已执行 `npm run build`（生成 `public/app.js`）且 `server.bin` 存在（`npm run fetch-server`）。
 
+## 版本说明
+
+0.1.23 移除临时 iOS 调试面板和日志上传接口。0.1.22 增加 scrcpy 编码器探测，下拉选择设备支持的视频/音频编码器。0.1.21 修复 Go 包使用旧页面导致的初始化错误。0.1.19 修复快速输入事件丢失并为自定义 scrcpy 参数增加预设下拉选项；0.1.18 修复 iOS H.264 解码器 codec ID。
+
 ## 验证记录
 
 打包产物已在 WSL Debian（x86_64）实机验证：

@@ -118,10 +118,18 @@ function stagePackage(target, binDir) {
     const webDir = join(appDir, "web");
     mkdirSync(webDir, { recursive: true });
     const indexHtml = firstExisting([
-        join(repoRoot, "fnos-app-native", "package", "app", "web", "index.html"),
         join(repoRoot, "public", "index.html"),
+        join(repoRoot, "fnos-app-native", "package", "app", "web", "index.html"),
     ]);
     if (!indexHtml) throw new Error("index.html not found");
+    const html = readFileSync(indexHtml, "utf8");
+    if (!html.includes("</head>")) throw new Error("index.html has no </head>");
+    if (!html.includes("</body>")) throw new Error("index.html has no </body>");
+    for (const id of ["opt-video-encoder", "opt-audio-encoder"]) {
+        if (!new RegExp(`<select\\b[^>]*\\bid=["']${id}["']`, "i").test(html)) {
+            throw new Error(`index.html #${id} must be a <select>`);
+        }
+    }
     copyFileSync(indexHtml, join(webDir, "index.html"));
 
     // Icons: copy from the native package's ui/images.

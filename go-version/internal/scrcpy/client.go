@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tiann/scrcpy-webrtc-go/internal/adb"
@@ -116,6 +117,58 @@ func Start(t *adb.Transport, serverBin []byte, o Options) (*Streams, error) {
 		Video: video, Audio: audio, Control: control,
 		ServerOut: serverOut, SCID: o.SCID, t: t,
 	}, nil
+}
+
+// ListEncoders starts scrcpy-server in list_encoders mode on an existing ADB
+// transport. The server exits after printing its encoder list and opens no
+// video/audio/control sockets.
+func ListEncoders(t *adb.Transport, serverBin []byte) ([]Encoder, error) {
+	if err := t.PushFile(serverBin, ServerPath, time.Now().Unix()); err != nil {
+		return nil, fmt.Errorf("scrcpy: push server for encoder list: %w", err)
+	}
+	audio, control, list := false, false, true
+	opts := Options{Audio: &audio, Control: &control, ListEncoders: &list}
+	socket, err := t.OpenSocket("exec:" + opts.StartCommand())
+	if err != nil {
+		return nil, fmt.Errorf("scrcpy: start encoder listing: %w", err)
+	}
+	defer socket.Close()
+
+	type readResult struct {
+		output []byte
+		err    error
+	}
+	result := make(chan readResult, 1)
+	go func() {
+		output, err := io.ReadAll(io.LimitReader(socket, 1<<20))
+		result <- readResult{output: output, err: err}
+	}()
+
+	var output []byte
+	select {
+	case r := <-result:
+		if r.err != nil {
+			return nil, fmt.Errorf("scrcpy: read encoder listing: %w", r.err)
+		}
+		output = r.output
+	case <-time.After(20 * time.Second):
+		return nil, errors.New("scrcpy: encoder listing timed out")
+	}
+
+	encoders := make([]Encoder, 0)
+	for _, line := range strings.Split(string(output), "\n") {
+		if encoder, ok := ParseEncoderLine(strings.TrimSuffix(line, "\r")); ok {
+			encoders = append(encoders, encoder)
+		}
+	}
+	if len(encoders) == 0 {
+		detail := strings.TrimSpace(string(output))
+		if len(detail) > 512 {
+			detail = detail[:512]
+		}
+		return nil, fmt.Errorf("scrcpy: encoder listing returned no encoders: %s", detail)
+	}
+	return encoders, nil
 }
 
 // ReadVideoMeta parses the head of the video stream: optional 64-byte device

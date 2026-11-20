@@ -11,6 +11,7 @@
 // single-client):
 //
 //	./diag-arm64 -addr 172.16.2.95:5555
+//	./diag-arm64 -addr 172.16.2.95:5555 -encoders -server ./server.bin
 //	./diag-arm64 -addr 172.16.2.95:5555 -full -server ./server.bin
 package main
 
@@ -44,6 +45,7 @@ func main() {
 	serverFlag := flag.String("server", "", "scrcpy-server binary (required with -full)")
 	serverVersionFlag := flag.String("server-version", "3.1", "version argument passed to scrcpy-server")
 	full := flag.Bool("full", false, "also test scrcpy push + video meta (occupies adbd — stop other clients first)")
+	listEncoders := flag.Bool("encoders", false, "probe and print the device's scrcpy video/audio encoders")
 	timeout := flag.Duration("timeout", 10*time.Second, "per-step timeout")
 	videoEncoderFlag := flag.String("video-encoder", "", "pin video encoder, e.g. c2.android.avc.encoder")
 	videoCodecFlag := flag.String("video-codec", "h264", "video codec passed to scrcpy-server")
@@ -131,9 +133,25 @@ func main() {
 	}
 	fmt.Println()
 
-	// ---- Step 4: optional scrcpy push + video meta ----
+	// ---- Step 4: optional encoder discovery or scrcpy stream ----
 	scrcpyOK := false
-	if *full {
+	if *listEncoders {
+		fmt.Println("[4/4] scrcpy 编码器列表（push server.bin + list_encoders）")
+		bin, e := os.ReadFile(*serverFlag)
+		if e != nil || len(bin) == 0 {
+			fmt.Printf("      %s 无法加载 server.bin: %v（用 -server 指定 scrcpy-server）\n", mark(false), e)
+		} else {
+			encoders, e := scrcpy.ListEncoders(t, bin)
+			if e != nil {
+				fmt.Printf("      %s 获取编码器失败: %v\n", mark(false), e)
+			} else {
+				for _, encoder := range encoders {
+					fmt.Printf("      %s %-5s %-8s %-40s %s\n", mark(true),
+						encoder.Type, encoder.Codec, encoder.Name, encoder.HardwareType)
+				}
+			}
+		}
+	} else if *full {
 		fmt.Println("[4/4] scrcpy 推流（push server.bin + reverse + 读 video meta）")
 		fmt.Printf("      参数: server-version=%s codec=%s encoder=%q audio=%v bitrate=%d watchdog=%s\n",
 			*serverVersionFlag, *videoCodecFlag, *videoEncoderFlag, *audioFlag, *videoBitRateFlag, *fullTimeout)
@@ -218,7 +236,7 @@ func main() {
 			}
 		}
 	} else {
-		fmt.Println("[4/4] scrcpy 推流：跳过（加 -full -server <server.bin> 启用；会占用 adbd）")
+		fmt.Println("[4/4] scrcpy 检查：跳过（加 -encoders -server <server.bin> 查编码器，或 -full 测推流）")
 	}
 	fmt.Println()
 

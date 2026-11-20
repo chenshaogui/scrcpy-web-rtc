@@ -82,6 +82,9 @@ type Session struct {
 	videoEncoder    string
 	audioEncoder    string
 	audioCodec      string
+	encoders        []scrcpy.Encoder
+	encodersReady   bool
+	encoderProbe    bool
 	audioBroken     bool
 	audioOffTried   bool   // already restarted once with audio off (no restart loop)
 	lastConfig      []byte // last H.264 config (SPS/PPS), replayed to fresh RTC peers
@@ -182,8 +185,7 @@ func (s *Session) controlWorker() {
 func (s *Session) enqueueControl(fn func()) {
 	select {
 	case s.controlChain <- fn:
-	default:
-		// queue full: drop the oldest-style newest injection to avoid blocking
+	case <-s.done:
 	}
 }
 

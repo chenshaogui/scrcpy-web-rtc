@@ -3,6 +3,7 @@ import {
     WebGLVideoFrameRenderer,
     BitmapVideoFrameRenderer,
 } from "@yume-chan/scrcpy-decoder-webcodecs";
+import { ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
 import { SignalRoom, b64u } from "../signal.mjs";
 // xterm is ~300 KB of the bundle and only matters once the shell is opened,
 // so it loads on demand
@@ -318,6 +319,8 @@ function rememberEncoder(serial, patch) {
 }
 
 const $ = (id) => document.getElementById(id);
+const selectOptions = (select) =>
+    select?.tagName === "SELECT" ? Array.from(select.options || []) : [];
 const deviceSelect = $("device-select");
 const qualitySelect = $("quality-select");
 const encoderSelect = $("encoder-select");
@@ -363,7 +366,7 @@ for (const [id, key] of [
 $("opt-extra-add").textContent = t.optAdd;
 $("opt-apply").textContent = t.optApply;
 $("opt-reset").textContent = t.optReset;
-for (const opt of qualitySelect.options) {
+for (const opt of selectOptions(qualitySelect)) {
     opt.textContent = { auto: t.qAuto, low: t.qLow, medium: t.qMedium, high: t.qHigh }[opt.value];
 }
 
@@ -393,7 +396,7 @@ function fillEncoders(list, current) {
         encoderSelect.appendChild(opt);
     }
     // a host-side --video-encoder pin may not be in the device's own list
-    if (wanted && !Array.from(encoderSelect.options).some((o) => o.value === wanted)) {
+    if (wanted && !selectOptions(encoderSelect).some((o) => o.value === wanted)) {
         const opt = document.createElement("option");
         opt.value = wanted;
         opt.textContent = wanted;
@@ -401,6 +404,7 @@ function fillEncoders(list, current) {
     }
     encoderSelect.value = wanted;
     encoderSelect.hidden = encoderSelect.options.length < 2;
+    syncCustomEncoderOptions("opt-video-encoder", encoderSelect);
 }
 
 // the host reports the encoder the device actually opened, which can differ
@@ -438,7 +442,7 @@ function fillAudioEncoders(list, current) {
         opt.title = [e.name, e.codec, e.hardwareType].filter(Boolean).join(" · ");
         audioEncoderSelect.appendChild(opt);
     }
-    if (wanted && !Array.from(audioEncoderSelect.options).some((o) => o.value === wanted)) {
+    if (wanted && !selectOptions(audioEncoderSelect).some((o) => o.value === wanted)) {
         const opt = document.createElement("option");
         opt.value = wanted;
         opt.textContent = wanted;
@@ -446,6 +450,7 @@ function fillAudioEncoders(list, current) {
     }
     audioEncoderSelect.value = wanted;
     audioEncoderSelect.hidden = audioEncoderSelect.options.length < 2;
+    syncCustomEncoderOptions("opt-audio-encoder", audioEncoderSelect);
 }
 
 function setActiveAudioEncoder(name) {
@@ -457,7 +462,7 @@ function setActiveAudioEncoder(name) {
 resetEncoderOptions();
 resetAudioEncoderOptions();
 // show the remembered preset before anything is even connected
-if (Array.from(qualitySelect.options).some((o) => o.value === session.quality)) {
+if (selectOptions(qualitySelect).some((o) => o.value === session.quality)) {
     qualitySelect.value = session.quality;
 }
 kbdInput.placeholder = t.kbdPlaceholder;
@@ -998,7 +1003,13 @@ function connect(serial) {
                 // is parsed — the follow-up "size" message carries it then
                 streamW = msg.width || 0;
                 streamH = msg.height || 0;
-                startDecoder(msg.codec);
+                try {
+                    startDecoder(msg.codec);
+                } catch (e) {
+                    console.error("video decoder initialization failed:", e);
+                    setBadge(t.decodeError(e.message), "error");
+                    return;
+                }
                 $("btn-shell").hidden = !msg.shell;
                 if (msg.preset) qualitySelect.value = msg.auto ? "auto" : msg.preset;
                 if (path !== "rtc") setBadge("WS");
@@ -1103,13 +1114,23 @@ function startDecoder(codec) {
         console.warn("WS video unavailable: WebCodecs VideoDecoder is not defined; relying on WebRTC");
         return;
     }
+    const codecId = typeof codec === "string"
+        ? ({
+            h264: ScrcpyVideoCodecId.H264,
+            h265: ScrcpyVideoCodecId.H265,
+            av1: ScrcpyVideoCodecId.AV1,
+        })[codec.toLowerCase()]
+        : codec;
+    if (!Object.values(ScrcpyVideoCodecId).includes(codecId)) {
+        throw new Error(`Unsupported video codec: ${codec}`);
+    }
     let renderer;
     try {
         renderer = new WebGLVideoFrameRenderer();
     } catch {
         renderer = new BitmapVideoFrameRenderer();
     }
-    decoder = new WebCodecsVideoDecoder({ codec, renderer });
+    decoder = new WebCodecsVideoDecoder({ codec: codecId, renderer });
     writer = decoder.writable.getWriter();
 
     // replace only the previous canvas — the WebRTC <video> may already be
@@ -1485,7 +1506,10 @@ function handleShellMessage(msg) {
     if (msg.t === "shell-ready") {
         shellReady = true;
     } else if (msg.t === "shell-out") {
-        term?.write(Uint8Array.from(atob(msg.d), (c) => c.charCodeAt(0)));
+        const output = atob(msg.d || "");
+        const bytes = new Uint8Array(output.length);
+        for (let i = 0; i < output.length; i++) bytes[i] = output.charCodeAt(i);
+        term?.write(bytes);
     } else if (msg.t === "shell-exit") {
         shellReady = false;
         term?.write(`\r\n\x1b[90m[${t.shellExited(msg.code)}]\x1b[0m\r\n`);
@@ -1850,25 +1874,58 @@ audioEncoderSelect.onchange = () => {
 // hand-tuned overrides that beat both the quality preset and the dedicated
 // encoder fields above; empty fields fall back to whatever the preset chose
 const OPT_FIELDS = [
-    { key: "maxSize", id: "opt-max-size", kind: "number" },
+    { key: "maxSize", id: "opt-max-size", customId: "opt-max-size-custom", kind: "number" },
     // Mbps in the UI, bps on the wire — scrcpy-server's option is in bps and
     // users reason in Mbps, so convert at the boundary
-    { key: "videoBitRate", id: "opt-video-bit-rate", kind: "mbps" },
-    { key: "maxFps", id: "opt-max-fps", kind: "number" },
+    { key: "videoBitRate", id: "opt-video-bit-rate", customId: "opt-video-bit-rate-custom", kind: "mbps" },
+    { key: "maxFps", id: "opt-max-fps", customId: "opt-max-fps-custom", kind: "number" },
     { key: "videoCodec", id: "opt-video-codec", kind: "select" },
-    { key: "videoEncoder", id: "opt-video-encoder", kind: "string" },
-    { key: "audioEncoder", id: "opt-audio-encoder", kind: "string" },
-    { key: "audioBitRate", id: "opt-audio-bit-rate", kind: "number" },
-    { key: "screenOffTimeout", id: "opt-screen-off-timeout", kind: "number" },
+    { key: "videoEncoder", id: "opt-video-encoder", customId: "opt-video-encoder-custom", kind: "string" },
+    { key: "audioEncoder", id: "opt-audio-encoder", customId: "opt-audio-encoder-custom", kind: "string" },
+    { key: "audioBitRate", id: "opt-audio-bit-rate", customId: "opt-audio-bit-rate-custom", kind: "number" },
+    { key: "screenOffTimeout", id: "opt-screen-off-timeout", customId: "opt-screen-off-timeout-custom", kind: "number" },
 ];
 const BUILTIN_KEYS = new Set(OPT_FIELDS.map((f) => f.key));
+const CUSTOM_OPTION = "__custom__";
+
+function syncCustomEncoderOptions(id, source) {
+    const select = $(id);
+    if (select?.tagName !== "SELECT") return;
+    const options = selectOptions(select);
+    if (options.length === 0) return;
+    const custom = select.value === CUSTOM_OPTION;
+    const customValue = $(`${id}-custom`)?.value ?? "";
+    let selected = custom ? CUSTOM_OPTION : select.value;
+    const first = options[0];
+    select.replaceChildren(first);
+    for (const option of selectOptions(source).slice(1)) {
+        if (!option.value || option.value === CUSTOM_OPTION ||
+            selectOptions(select).some((item) => item.value === option.value)) continue;
+        select.add(new Option(option.textContent, option.value));
+    }
+    select.add(new Option("自定义…", CUSTOM_OPTION));
+    if (selected === CUSTOM_OPTION && customValue) {
+        const found = selectOptions(select).some((option) => option.value === customValue);
+        if (found) {
+            selected = customValue;
+            $(`${id}-custom`).value = "";
+        }
+    }
+    select.value = selected;
+    $(`${id}-custom`).hidden = select.value !== CUSTOM_OPTION;
+}
+
+function customFieldValue(field) {
+    const select = $(field.id);
+    return select.value === CUSTOM_OPTION ? $(field.customId).value.trim() : select.value.trim();
+}
 
 function readCustomOptions() {
     const out = {};
     for (const f of OPT_FIELDS) {
         const el = $(f.id);
         if (!el) continue;
-        const v = el.value.trim();
+        const v = customFieldValue(f);
         if (!v) continue;
         if (f.kind === "number") {
             const n = Number(v);
@@ -1898,14 +1955,26 @@ function writeCustomOptions(obj) {
     for (const f of OPT_FIELDS) {
         const el = $(f.id);
         if (!el) continue;
+        const custom = f.customId ? $(f.customId) : null;
         if (f.key in obj) {
             const v = obj[f.key];
-            el.value = f.kind === "mbps" && typeof v === "number"
+            const value = f.kind === "mbps" && typeof v === "number"
                 ? String(Math.round((v / 1_000_000) * 10) / 10)
                 : String(v);
+            if (selectOptions(el).some((option) => option.value === value)) {
+                el.value = value;
+                if (custom) custom.value = "";
+            } else if (custom) {
+                el.value = CUSTOM_OPTION;
+                custom.value = value;
+            } else {
+                el.value = value;
+            }
         } else {
             el.value = "";
+            if (custom) custom.value = "";
         }
+        if (custom) custom.hidden = el.value !== CUSTOM_OPTION;
     }
     const list = $("opt-extra-list");
     list.innerHTML = "";
@@ -1962,8 +2031,15 @@ $("opt-reset").onclick = () => { writeCustomOptions(null); sendCustomOptions(); 
 $("opt-extra-add").onclick = () => addExtraRow();
 for (const f of OPT_FIELDS) {
     const el = $(f.id);
-    if (el) el.addEventListener("change", updateCustomOptionsCount);
+    if (el) el.addEventListener("change", () => {
+        if (f.customId) $(f.customId).hidden = el.value !== CUSTOM_OPTION;
+        updateCustomOptionsCount();
+    });
+    const custom = f.customId ? $(f.customId) : null;
+    if (custom) custom.addEventListener("input", updateCustomOptionsCount);
 }
+syncCustomEncoderOptions("opt-video-encoder", encoderSelect);
+syncCustomEncoderOptions("opt-audio-encoder", audioEncoderSelect);
 
 // shows the remembered state before the first click
 $("btn-mute").textContent = muted ? "🔇" : "🔊";
